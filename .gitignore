@@ -1,0 +1,29 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.venv/
+venv/
+*.egg-info/
+
+# Secrets
+.env
+*.env
+.env.*
+
+# Runtime artifacts
+out/
+tmp/
+cache/
+logs/
+
+# CSV dumps
+*.csv
+
+# Test artifacts
+.pytest_cache/
+
+# OS
+.DS_Store
+Thumbs.db
