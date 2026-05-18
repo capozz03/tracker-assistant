@@ -92,6 +92,14 @@ print(result["key"])  # "MYQUEUE-42"
 | [Начало работы](docs/getting-started.md) | Установка, настройка .env, первый запуск |
 | [API-справочник](docs/api-reference.md) | Task, адаптер, формат task.json |
 
+## Изоляция в workspace
+
+Этот сервис изолирован через [ai-factory](https://github.com/capozz03/ai-assistant) стандарт:
+
+- **`CLAUDE.md`** — контекстная изоляция: агент знает только об этом сервисе
+- **`.mcp.json`** — только filesystem MCP-сервер, ограниченный директорией сервиса
+- **`cwd` в topic_config.json** — процесс агента стартует только в `tracker-assistant/`
+
 ## Требования
 
 - Python 3.10+
