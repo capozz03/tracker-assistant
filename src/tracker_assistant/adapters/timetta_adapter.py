@@ -8,7 +8,6 @@ from pathlib import Path
 from typing import Any
 
 from ..models import Task
-from .timetta_auth import TimettaAuth
 
 logger = logging.getLogger(__name__)
 
@@ -16,14 +15,8 @@ logger = logging.getLogger(__name__)
 class TimettaAdapter:
     BASE = "https://api.timetta.com/odata"
 
-    def __init__(self, token: str = "", auth: TimettaAuth | None = None) -> None:
+    def __init__(self, token: str = "") -> None:
         self._token = token
-        self._auth = auth
-
-    def _get_token(self, *, force_refresh: bool = False) -> str:
-        if self._auth is not None:
-            return self._auth.get_token(force_refresh=force_refresh)
-        return self._token
 
     def _request(
         self,
@@ -31,14 +24,12 @@ class TimettaAdapter:
         path: str,
         body: dict[str, Any] | None = None,
         params: str = "",
-        *,
-        _retried: bool = False,
     ) -> Any:
         url = f"{self.BASE}{path}"
         if params:
             url = f"{url}?{params}"
         headers = {
-            "Authorization": f"Bearer {self._get_token()}",
+            "Authorization": f"Bearer {self._token}",
             "Content-Type": "application/json; charset=utf-8",
             "Accept": "application/json",
         }
@@ -52,10 +43,6 @@ class TimettaAdapter:
                 logger.debug("← %s %s status=200", method, path)
                 return result
         except urllib.error.HTTPError as exc:
-            if exc.code == 401 and self._auth is not None and not _retried:
-                logger.info("[FIX] token: 401 on %s %s — refreshing token and retrying", method, path)
-                self._auth.get_token(force_refresh=True)
-                return self._request(method, path, body, params, _retried=True)
             payload = exc.read().decode("utf-8", errors="replace")
             logger.error("← %s %s status=%d body=%s", method, path, exc.code, payload)
             raise RuntimeError(f"Timetta {method} {path} → {exc.code}: {payload}") from exc
@@ -129,27 +116,21 @@ class TimettaAdapter:
             f"Content-Type: application/octet-stream\r\n\r\n"
         ).encode() + content + f"\r\n--{boundary}--\r\n".encode()
 
-        def _do_attach(*, force_refresh: bool = False) -> dict[str, Any] | None:
-            headers = {
-                "Authorization": f"Bearer {self._get_token(force_refresh=force_refresh)}",
-                "Content-Type": f"multipart/form-data; boundary={boundary}",
-            }
-            req = urllib.request.Request(url=url, method="POST", headers=headers, data=multipart)
-            try:
-                with urllib.request.urlopen(req) as resp:
-                    raw = resp.read().decode("utf-8").strip()
-                    result: dict[str, Any] = json.loads(raw) if raw else {}
-                    logger.debug("Attached file %s to task %s", path.name, task_id)
-                    return result
-            except urllib.error.HTTPError as exc:
-                if exc.code == 401 and self._auth is not None and not force_refresh:
-                    logger.info("[FIX] token: 401 on attach_file — refreshing token and retrying")
-                    return _do_attach(force_refresh=True)
-                payload = exc.read().decode("utf-8", errors="replace")
-                if exc.code == 404:
-                    logger.warning("Attachments not supported for Issues — skipping (task=%s)", task_id)
-                    return None
-                logger.error("attach_file failed: %d %s", exc.code, payload)
-                raise RuntimeError(f"attach_file {task_id} → {exc.code}: {payload}") from exc
-
-        return _do_attach()
+        headers = {
+            "Authorization": f"Bearer {self._token}",
+            "Content-Type": f"multipart/form-data; boundary={boundary}",
+        }
+        req = urllib.request.Request(url=url, method="POST", headers=headers, data=multipart)
+        try:
+            with urllib.request.urlopen(req) as resp:
+                raw = resp.read().decode("utf-8").strip()
+                result: dict[str, Any] = json.loads(raw) if raw else {}
+                logger.debug("Attached file %s to task %s", path.name, task_id)
+                return result
+        except urllib.error.HTTPError as exc:
+            payload = exc.read().decode("utf-8", errors="replace")
+            if exc.code == 404:
+                logger.warning("Attachments not supported for Issues — skipping (task=%s)", task_id)
+                return None
+            logger.error("attach_file failed: %d %s", exc.code, payload)
+            raise RuntimeError(f"attach_file {task_id} → {exc.code}: {payload}") from exc

@@ -13,7 +13,6 @@ if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
 from tracker_assistant.adapters.timetta_adapter import TimettaAdapter
-from tracker_assistant.adapters.timetta_auth import TimettaAuth
 from tracker_assistant.io_utils import load_cached, load_env
 from tracker_assistant.models import Task
 from tracker_assistant.pipeline import create_task, list_projects
@@ -21,20 +20,10 @@ from tracker_assistant.pipeline import create_task, list_projects
 
 def _build_adapter(root: Path) -> TimettaAdapter:
     env = load_env(root)
-    client_id = env.get("TIMETTA_CLIENT_ID") or os.environ.get("TIMETTA_CLIENT_ID", "")
-    client_secret = env.get("TIMETTA_CLIENT_SECRET") or os.environ.get("TIMETTA_CLIENT_SECRET", "")
-    if client_id and client_secret:
-        scope = env.get("TIMETTA_SCOPE") or os.environ.get("TIMETTA_SCOPE", "")
-        logging.debug("[FIX] Adapter: using OAuth2 client_credentials (client_id=%s)", client_id)
-        auth = TimettaAuth(root=root, client_id=client_id, client_secret=client_secret, scope=scope)
-        return TimettaAdapter(auth=auth)
     token = env.get("TIMETTA_TOKEN") or os.environ.get("TIMETTA_TOKEN", "")
     if not token:
-        raise SystemExit(
-            "ERROR: set TIMETTA_CLIENT_ID + TIMETTA_CLIENT_SECRET in .env for auto-refresh, "
-            "or TIMETTA_TOKEN for a static token"
-        )
-    logging.debug("Adapter: using static TIMETTA_TOKEN (no auto-refresh)")
+        raise SystemExit("ERROR: set TIMETTA_TOKEN in .env")
+    logging.debug("Adapter: using TIMETTA_TOKEN")
     return TimettaAdapter(token=token)
 
 
