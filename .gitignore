@@ -10,8 +10,6 @@ venv/
 # Secrets
 .env
 *.env
-.env.*
-
 # Runtime artifacts
 out/
 tmp/

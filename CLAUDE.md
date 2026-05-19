@@ -2,29 +2,48 @@
 
 ## Что я делаю
 
-Я работаю в сервисе **tracker-assistant** — минималистичный Python-клиент для Yandex Tracker.
+Я работаю в сервисе **tracker-assistant** — минималистичный Python-клиент для Timetta.
 
 Моя зона ответственности:
 - `scripts/task_cli.py` — CLI-инструмент (list-projects, create, add-comment, attach-file)
-- `src/` — библиотечный код (`Task`, `YandexTrackerAdapter`, `list_projects`, `create_task`)
+- `src/` — библиотечный код (`Task`, `TimettaAdapter`, `list_projects`, `create_task`)
 - `docs/` — документация этого сервиса
 - `tests/` — тесты
 - `templates/` — JSON-шаблоны задач
 - `README.md` — документация сервиса
 
-## Что я НЕ делаю
+## ЗАПРЕЩЁННЫЕ ДЕЙСТВИЯ (жёсткий контроль)
 
-- НЕ трогаю файлы за пределами `tracker-assistant/`
-- НЕ читаю и НЕ изменяю `topic_config.json` в корне workspace
-- НЕ знаю о `telegram-ai-agent` и не помогаю с его кодом
-- НЕ изменяю `Makefile` корневого workspace
-- НЕ изменяю `services.yaml` и другие файлы оркестрации workspace
-- НЕ работаю с другими сервисами workspace
+Следующие действия ЗАПРЕЩЕНЫ независимо от задачи:
+
+### Запрещённые bash-команды
+- `find /` — поиск по всей файловой системе
+- `find ..` — выход в родительскую директорию
+- `grep -r ... /Users` — поиск по путям вне tracker-assistant/
+- `grep -r ... ..` — grep в родительской директории
+- `cat`, `ls`, `read` любых файлов вне `tracker-assistant/`
+- `cd ..`, `cd /` — смена директории за пределы сервиса
+
+### Запрещённый доступ к файлам
+- `topic_config.json` — приватная конфигурация workspace
+- Любые файлы `telegram-ai-agent/`
+- Любые файлы других сервисов workspace
+- `.env` других сервисов
+
+### Реакция на нехватку контекста
+Если чего-то не хватает — СТОП + сообщение через send_message.
+Никогда не ищи недостающее самостоятельно.
+
+Примеры:
+- Нет `TIMETTA_TOKEN` → `❌ Токен не настроен. Добавьте TIMETTA_TOKEN в .env`
+- Нет `project_id` → `❌ Проект не настроен. Добавьте timetta_project_id в topic_config.json`
+- Непонятная задача → `❓ Не понимаю задачу: <что именно непонятно>`
 
 ## Стек
 
 - Python 3.10+ (только стандартная библиотека — нет внешних зависимостей)
-- Yandex Tracker REST API (OAuth-токен + Org ID)
+- Timetta OData v4 API (`https://api.timetta.com/odata`)
+- Аутентификация: Bearer token (`Authorization: Bearer <token>`)
 - CLI: argparse (`scripts/task_cli.py`)
 
 ## Точки входа
@@ -38,27 +57,26 @@
 
 ```bash
 # Список проектов
-python scripts/task_cli.py list-projects
+uv run python scripts/task_cli.py list-projects
 
 # Создать задачу из JSON-файла
-python scripts/task_cli.py create --input task.json
+uv run python scripts/task_cli.py create --input task.json
 
 # Добавить комментарий
-python scripts/task_cli.py add-comment --issue PROJ-123 --text "готово"
+uv run python scripts/task_cli.py add-comment --issue task-uuid --text "готово"
 
 # Прикрепить файл
-python scripts/task_cli.py attach-file --issue PROJ-123 --file ./spec.pdf
+uv run python scripts/task_cli.py attach-file --issue task-uuid --file ./spec.pdf
 
 # Verbose-логирование
-python scripts/task_cli.py --log-level DEBUG list-projects
+uv run python scripts/task_cli.py --log-level DEBUG list-projects
 ```
 
 ## Конфигурация
 
 `.env` в корне сервиса:
 ```
-YANDEX_TRACKER_TOKEN=your_oauth_token
-YANDEX_TRACKER_ORG_ID=your_org_id
+TIMETTA_TOKEN=your_bearer_token
 ```
 
 ## Изоляция (ai-factory стандарт)

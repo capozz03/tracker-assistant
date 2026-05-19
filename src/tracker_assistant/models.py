@@ -6,15 +6,12 @@ from typing import Any
 
 @dataclass
 class Task:
-    queue: str
-    summary: str
-    project_id: str = ""
+    project_id: str              # ID проекта в Timetta (обязательно)
+    summary: str                 # название задачи (обязательно)
     description: str = ""
-    issue_type: str = "task"
+    task_type: str = ""          # тип задачи (опционально)
+    assignee: str = ""           # login или ID исполнителя
     tags: list[str] = field(default_factory=list)
-    assignee: str = ""
-    followers: list[str] = field(default_factory=list)
-    parent: str = ""
     comments: list[str] = field(default_factory=list)
     attachments: list[str] = field(default_factory=list)
     extra: dict[str, Any] = field(default_factory=dict)
@@ -27,21 +24,16 @@ class Task:
 
     def to_api_body(self) -> dict[str, Any]:
         body: dict[str, Any] = {
-            "queue": self.queue,
-            "summary": self.summary,
-            "type": self.issue_type,
+            "projectId": self.project_id,
+            "name": self.summary,
         }
         if self.description:
             body["description"] = self.description
-        if self.project_id:
-            body["project"] = {"primary": int(self.project_id)}
+        if self.task_type:
+            body["typeId"] = self.task_type
+        if self.assignee:
+            body["assigneeId"] = self.assignee
         if self.tags:
             body["tags"] = self.tags
-        if self.assignee:
-            body["assignee"] = self.assignee
-        if self.followers:
-            body["followers"] = self.followers
-        if self.parent:
-            body["parent"] = self.parent
         body.update(self.extra)
         return body

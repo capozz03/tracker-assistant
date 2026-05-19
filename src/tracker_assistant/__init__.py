@@ -1,5 +1,5 @@
 from .models import Task
-from .adapters.yandex_tracker_adapter import YandexTrackerAdapter
+from .adapters.timetta_adapter import TimettaAdapter
 from .pipeline import list_projects, create_task
 
-__all__ = ["Task", "YandexTrackerAdapter", "list_projects", "create_task"]
+__all__ = ["Task", "TimettaAdapter", "list_projects", "create_task"]

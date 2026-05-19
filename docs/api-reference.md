@@ -8,18 +8,15 @@
 from tracker_assistant import Task
 
 task = Task(
-    queue="MYQUEUE",          # очередь (обязательно)
-    summary="Название",       # название (обязательно)
-    project_id="42",          # ID проекта (опционально)
-    description="Описание",   # markdown-описание
-    issue_type="task",        # тип задачи (default: "task")
-    tags=["backend"],         # теги
-    assignee="ivanov",        # логин исполнителя
-    followers=["petrov"],     # наблюдатели
-    parent="MYQUEUE-1",       # ключ родительской задачи
-    comments=["Комментарий"], # комментарии — добавляются после создания
-    attachments=["./spec.pdf"], # пути к файлам — прикрепляются после создания
-    extra={"priority": "critical"},  # любые дополнительные поля API
+    project_id="uuid",         # ID проекта в Timetta (обязательно)
+    summary="Название",        # название (обязательно)
+    description="Описание",    # markdown-описание
+    task_type="",              # тип задачи (опционально)
+    tags=["backend"],          # теги
+    assignee="user-uuid",      # ID/логин исполнителя
+    comments=["Комментарий"],  # комментарии — добавляются после создания
+    attachments=["./spec.pdf"],# пути к файлам — прикрепляются после создания
+    extra={"priority": 2},     # любые дополнительные поля API
 )
 ```
 
@@ -27,28 +24,25 @@ task = Task(
 
 | Поле | Тип | Обязательно | Описание |
 |---|---|---|---|
-| `queue` | `str` | да | Очередь (ключ), например `MYPROJECT` |
+| `project_id` | `str` | да | ID проекта в Timetta |
 | `summary` | `str` | да | Название задачи |
-| `project_id` | `str` | нет | ID проекта (`"42"`) |
 | `description` | `str` | нет | Описание в markdown |
-| `issue_type` | `str` | нет | Тип: `task`, `bug`, `feature`, etc. |
+| `task_type` | `str` | нет | Тип задачи (typeId в API) |
 | `tags` | `list[str]` | нет | Теги |
-| `assignee` | `str` | нет | Логин исполнителя |
-| `followers` | `list[str]` | нет | Логины наблюдателей |
-| `parent` | `str` | нет | Ключ родительской задачи |
+| `assignee` | `str` | нет | ID/логин исполнителя |
 | `comments` | `list[str]` | нет | Тексты комментариев |
 | `attachments` | `list[str]` | нет | Пути к файлам |
-| `extra` | `dict` | нет | Доп. поля Yandex Tracker API |
+| `extra` | `dict` | нет | Доп. поля Timetta API |
 
 ### Методы Task
 
 ```python
 # Создать из словаря (например, из JSON-файла)
-task = Task.from_dict({"queue": "Q", "summary": "S", "tags": ["x"]})
+task = Task.from_dict({"project_id": "uuid", "summary": "S", "tags": ["x"]})
 
 # Сформировать тело запроса к API
 body = task.to_api_body()
-# → {"queue": "Q", "summary": "S", "type": "task", "tags": ["x"]}
+# → {"projectId": "uuid", "name": "S", "tags": ["x"]}
 ```
 
 ---
@@ -59,7 +53,7 @@ body = task.to_api_body()
 
 ```json
 {
-  "queue": "MYQUEUE",
+  "project_id": "your-project-uuid",
   "summary": "Название задачи"
 }
 ```
@@ -68,15 +62,11 @@ body = task.to_api_body()
 
 ```json
 {
-  "queue": "MYQUEUE",
+  "project_id": "your-project-uuid",
   "summary": "Добавить API для подтверждения заказа",
-  "project_id": "42",
   "description": "## Контекст\n\nПокупатель подтверждает заказ через мобильное приложение.\n\n## Критерии приёмки\n\n- POST /orders/{id}/confirm возвращает 200\n- Статус заказа меняется на confirmed",
-  "issue_type": "task",
   "tags": ["backend", "api"],
-  "assignee": "ivanov",
-  "followers": ["petrov", "sidorov"],
-  "parent": "",
+  "assignee": "user-uuid",
   "comments": [
     "Обсудить на стендапе во вторник"
   ],
@@ -84,68 +74,64 @@ body = task.to_api_body()
     "./docs/api-spec.pdf"
   ],
   "extra": {
-    "priority": "critical"
+    "priority": 2
   }
 }
 ```
 
 ---
 
-## YandexTrackerAdapter
+## TimettaAdapter
 
 ```python
-from tracker_assistant import YandexTrackerAdapter
+from tracker_assistant import TimettaAdapter
 
-adapter = YandexTrackerAdapter(
-    token="AgAAAABx...",
-    org_id="12345678",
-    org_type="cloud",   # "cloud" (X-Cloud-Org-ID) или "yandex" (X-Org-ID)
-)
+adapter = TimettaAdapter(token="your_bearer_token")
 ```
 
 ### Методы адаптера
 
 | Метод | Описание |
 |---|---|
-| `get_projects()` | Список всех проектов с автопагинацией |
-| `create_issue(task)` | Создать задачу в Tracker |
-| `add_comment(key, text)` | Добавить комментарий |
-| `attach_file(key, filepath)` | Прикрепить файл (multipart) |
-| `get_issue(key)` | Получить задачу по ключу |
-| `update_issue(key, **fields)` | Обновить поля задачи |
+| `get_projects()` | Список всех проектов |
+| `create_task(task)` | Создать задачу |
+| `get_task(task_id)` | Получить задачу по ID |
+| `update_task(task_id, **fields)` | Обновить поля задачи |
+| `add_comment(task_id, text)` | Добавить комментарий (None при 404) |
+| `attach_file(task_id, filepath)` | Прикрепить файл (None при 404) |
 
 #### get_projects()
 
 ```python
 projects = adapter.get_projects()
-# → [{"id": "1", "name": "Мой проект", "shortName": "MYPROJ", ...}, ...]
+# → [{"id": "uuid-1", "name": "Мой проект", "code": "MYPROJ"}, ...]
 ```
 
-Автоматически пагинирует (по 50 проектов на страницу).
-
-#### create_issue(task)
+#### create_task(task)
 
 ```python
-result = adapter.create_issue(task)
-print(result["key"])  # "MYQUEUE-42"
+result = adapter.create_task(task)
+print(result["id"])  # "task-uuid-42"
 ```
 
-#### add_comment(issue_key, text)
+#### add_comment(task_id, text)
 
 ```python
-adapter.add_comment("MYQUEUE-42", "Готово к ревью")
+adapter.add_comment("task-uuid-42", "Готово к ревью")
+# Возвращает None если endpoint не поддерживается (404)
 ```
 
-#### attach_file(issue_key, filepath)
+#### attach_file(task_id, filepath)
 
 ```python
-adapter.attach_file("MYQUEUE-42", "/path/to/spec.pdf")
+adapter.attach_file("task-uuid-42", "/path/to/spec.pdf")
+# Возвращает None если endpoint не поддерживается (404)
 ```
 
-#### update_issue(issue_key, **fields)
+#### update_task(task_id, **fields)
 
 ```python
-adapter.update_issue("MYQUEUE-42", summary="Новое название", priority="low")
+adapter.update_task("task-uuid-42", name="Новое название", priority=3)
 ```
 
 ---
@@ -171,7 +157,7 @@ from pathlib import Path
 result = create_task(adapter, task, root=Path("."))
 ```
 
-1. Вызывает `adapter.create_issue(task)` — создаёт задачу
+1. Вызывает `adapter.create_task(task)` — создаёт задачу
 2. Для каждого `task.comments` вызывает `adapter.add_comment()`
 3. Для каждого `task.attachments` вызывает `adapter.attach_file()`
 
@@ -185,10 +171,12 @@ result = create_task(adapter, task, root=Path("."))
 
 ```python
 try:
-    result = adapter.create_issue(task)
+    result = adapter.create_task(task)
 except RuntimeError as e:
-    print(e)  # "Yandex Tracker POST /issues → 422: {...}"
+    print(e)  # "Timetta POST /ProjectTasks → 422: {...}"
 ```
+
+Методы `add_comment` и `attach_file` при 404 возвращают `None` (graceful degradation).
 
 ---
 
@@ -198,7 +186,7 @@ except RuntimeError as e:
 
 | Логгер | Модуль |
 |---|---|
-| `tracker_assistant.adapters.yandex_tracker_adapter` | HTTP-запросы |
+| `tracker_assistant.adapters.timetta_adapter` | HTTP-запросы |
 | `tracker_assistant.pipeline` | Создание задач |
 
 Настройка уровня:

@@ -6,8 +6,7 @@
 
 - Python 3.10+
 - [uv](https://docs.astral.sh/uv/) — менеджер пакетов и окружений
-- Токен OAuth для Yandex Tracker
-- Org ID организации (Cloud или Yandex)
+- Bearer-токен Timetta (OAuth 2.0)
 
 ## Установка
 
@@ -26,23 +25,14 @@ uv sync
 Создайте файл `.env` в корне `tracker-assistant/`:
 
 ```env
-YANDEX_TRACKER_TOKEN=AgAAAABx...
-YANDEX_TRACKER_ORG_ID=12345678
-# Необязательно (default: cloud)
-# YANDEX_TRACKER_ORG_TYPE=cloud
+TIMETTA_TOKEN=your_bearer_token
 ```
 
 | Переменная | Обязательна | Описание |
 |---|---|---|
-| `YANDEX_TRACKER_TOKEN` | да | OAuth-токен Yandex |
-| `YANDEX_TRACKER_ORG_ID` | да | ID организации |
-| `YANDEX_TRACKER_ORG_TYPE` | нет | `cloud` (default) или `yandex` |
+| `TIMETTA_TOKEN` | да | Bearer-токен Timetta (OAuth 2.0) |
 
-**Где взять токен:** Yandex OAuth → приложения → получить токен с правами Tracker.
-
-**Где взять Org ID:** Yandex Cloud → организация → ID, или из URL Tracker (`tracker.yandex.ru/org/<ID>`).
-
-**`org_type`:** используйте `cloud` для Cloud Organization (X-Cloud-Org-ID), `yandex` для Yandex Organization (X-Org-ID).
+**Где взять токен:** Timetta → настройки аккаунта → API → создать токен доступа.
 
 ## Первый запуск
 
@@ -54,12 +44,12 @@ uv run python scripts/task_cli.py list-projects
 Ожидаемый вывод:
 ```json
 [
-  { "id": "1", "name": "Мой проект", "shortName": "MYPROJ" },
+  { "id": "uuid-1", "name": "Мой проект", "code": "MYPROJ" },
   ...
 ]
 ```
 
-Если получили ошибку — проверьте токен и org_id в `.env`.
+Если получили ошибку — проверьте токен в `.env`.
 
 ## Создание задачи
 
@@ -67,13 +57,11 @@ uv run python scripts/task_cli.py list-projects
 
 ```json
 {
-  "queue": "MYPROJ",
+  "project_id": "your-project-uuid",
   "summary": "Добавить API для подтверждения заказа",
   "description": "## Контекст\n\nПокупатель подтверждает заказ.",
-  "issue_type": "task",
   "tags": ["backend", "api"],
-  "assignee": "ivanov",
-  "followers": ["petrov"],
+  "assignee": "user-uuid",
   "comments": ["Обсудить на стендапе"],
   "attachments": []
 }
@@ -85,22 +73,22 @@ uv run python scripts/task_cli.py list-projects
 uv run python scripts/task_cli.py create --input task.json
 ```
 
-Вывод — полный JSON ответа от API, включая ключ созданной задачи:
+Вывод — полный JSON ответа от API, включая id созданной задачи:
 
 ```json
-{ "key": "MYPROJ-42", "summary": "Добавить API для подтверждения заказа", ... }
+{ "id": "task-uuid-42", "name": "Добавить API для подтверждения заказа", ... }
 ```
 
 ## Добавление комментария
 
 ```bash
-uv run python scripts/task_cli.py add-comment --issue MYPROJ-42 --text "Реализовано, готово к ревью"
+uv run python scripts/task_cli.py add-comment --issue task-uuid-42 --text "Реализовано, готово к ревью"
 ```
 
 ## Прикрепление файла
 
 ```bash
-uv run python scripts/task_cli.py attach-file --issue MYPROJ-42 --file ./docs/spec.pdf
+uv run python scripts/task_cli.py attach-file --issue task-uuid-42 --file ./docs/spec.pdf
 ```
 
 ## Отладочный режим

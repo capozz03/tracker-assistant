@@ -1,8 +1,8 @@
 # Tracker Assistant
 
-> Минималистичный Python-клиент для Yandex Tracker: получить проекты, создать задачу.
+> Минималистичный Python-клиент для Timetta: получить проекты, создать задачу.
 
-Тонкая обёртка над Yandex Tracker API. Без черновиков, без шаблонов, без промежуточных шагов — задача создаётся напрямую.
+Тонкая обёртка над Timetta OData v4 API. Без черновиков, без шаблонов, без промежуточных шагов — задача создаётся напрямую.
 
 ## Быстрый старт
 
@@ -10,9 +10,8 @@
 # Установить зависимости
 uv sync
 
-# Создать .env с токенами
-echo "YANDEX_TRACKER_TOKEN=your_token" >> .env
-echo "YANDEX_TRACKER_ORG_ID=your_org_id" >> .env
+# Создать .env с токеном
+echo "TIMETTA_TOKEN=your_bearer_token" >> .env
 
 # Список проектов
 uv run python scripts/task_cli.py list-projects
@@ -23,8 +22,8 @@ uv run python scripts/task_cli.py create --input task.json
 
 ## Возможности
 
-- **Список проектов** — получить все проекты организации из API
-- **Создание задачи** — с названием, описанием, тегами, исполнителем, наблюдателями
+- **Список проектов** — получить все проекты из Timetta API
+- **Создание задачи** — с названием, описанием, тегами, исполнителем
 - **Комментарии** — добавить комментарии сразу после создания задачи
 - **Вложения** — прикрепить файлы к задаче
 - **Verbose-логирование** — все HTTP-запросы в DEBUG-режиме
@@ -33,12 +32,11 @@ uv run python scripts/task_cli.py create --input task.json
 
 ```json
 {
-  "queue": "MYPROJECT",
+  "project_id": "your-project-uuid",
   "summary": "Добавить API для подтверждения заказа",
   "description": "## Контекст\n\nПокупатель подтверждает заказ через мобильное приложение.",
-  "issue_type": "task",
   "tags": ["backend", "api"],
-  "assignee": "ivanov",
+  "assignee": "user-uuid",
   "comments": ["Обсудить с командой на следующем стендапе"]
 }
 ```
@@ -47,40 +45,38 @@ uv run python scripts/task_cli.py create --input task.json
 
 | Команда | Описание |
 |---|---|
-| `list-projects` | Список проектов организации |
+| `list-projects` | Список проектов |
 | `create --input task.json` | Создать задачу из JSON-файла |
-| `add-comment --issue KEY --text "..."` | Добавить комментарий к задаче |
-| `attach-file --issue KEY --file path` | Прикрепить файл к задаче |
+| `add-comment --issue ID --text "..."` | Добавить комментарий к задаче |
+| `attach-file --issue ID --file path` | Прикрепить файл к задаче |
 
 ```bash
 uv run python scripts/task_cli.py --log-level DEBUG list-projects
 uv run python scripts/task_cli.py create --input task.json --root .
-uv run python scripts/task_cli.py add-comment --issue PROJ-123 --text "готово"
-uv run python scripts/task_cli.py attach-file --issue PROJ-123 --file ./spec.pdf
+uv run python scripts/task_cli.py add-comment --issue task-uuid --text "готово"
+uv run python scripts/task_cli.py attach-file --issue task-uuid --file ./spec.pdf
 ```
 
 ## Использование как библиотека
 
 ```python
-from tracker_assistant import Task, YandexTrackerAdapter, list_projects, create_task
+from tracker_assistant import Task, TimettaAdapter, list_projects, create_task
 
-adapter = YandexTrackerAdapter(
-    token="...", org_id="...", org_type="cloud"  # или "yandex"
-)
+adapter = TimettaAdapter(token="your_bearer_token")
 
 # Список проектов
 projects = list_projects(adapter)
 
 # Создание задачи
 task = Task(
-    queue="MYQUEUE",
+    project_id="your-project-uuid",
     summary="Новая задача",
     tags=["backend"],
-    assignee="ivanov",
+    assignee="user-uuid",
     comments=["Первый комментарий"],
 )
 result = create_task(adapter, task)
-print(result["key"])  # "MYQUEUE-42"
+print(result["id"])  # "task-uuid-42"
 ```
 
 ---
@@ -104,4 +100,4 @@ print(result["key"])  # "MYQUEUE-42"
 
 - Python 3.10+
 - [uv](https://docs.astral.sh/uv/) (менеджер пакетов)
-- Токен OAuth и Org ID Yandex Tracker
+- Bearer-токен Timetta (OAuth 2.0)

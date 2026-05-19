@@ -1,3 +1,3 @@
-from .yandex_tracker_adapter import YandexTrackerAdapter
+from .timetta_adapter import TimettaAdapter
 
-__all__ = ["YandexTrackerAdapter"]
+__all__ = ["TimettaAdapter"]
