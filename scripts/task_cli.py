@@ -13,7 +13,7 @@ if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
 from tracker_assistant.adapters.timetta_adapter import TimettaAdapter
-from tracker_assistant.io_utils import load_env
+from tracker_assistant.io_utils import load_cached, load_env
 from tracker_assistant.models import Task
 from tracker_assistant.pipeline import create_task, list_projects
 
@@ -45,6 +45,24 @@ def cmd_list_projects(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_list_users(args: argparse.Namespace) -> int:
+    root = Path(args.root).resolve()
+    adapter = _build_adapter(root)
+    users = load_cached(root, "users", adapter.get_users, no_cache=args.no_cache)
+    logging.debug("list-users: returning %d users", len(users))
+    print(json.dumps(users, ensure_ascii=False, indent=2))
+    return 0
+
+
+def cmd_list_tags(args: argparse.Namespace) -> int:
+    root = Path(args.root).resolve()
+    adapter = _build_adapter(root)
+    tags = load_cached(root, "tags", adapter.get_tags, no_cache=args.no_cache)
+    logging.debug("list-tags: returning %d tags", len(tags))
+    print(json.dumps(tags, ensure_ascii=False, indent=2))
+    return 0
+
+
 def cmd_create(args: argparse.Namespace) -> int:
     root = Path(args.root).resolve()
     input_path = Path(args.input)
@@ -63,6 +81,41 @@ def cmd_add_comment(args: argparse.Namespace) -> int:
     adapter = _build_adapter(Path(args.root).resolve())
     logging.debug("Adding comment to task %s", args.issue)
     result = adapter.add_comment(args.issue, args.text)
+    print(json.dumps(result, ensure_ascii=False, indent=2))
+    return 0
+
+
+def cmd_update(args: argparse.Namespace) -> int:
+    root = Path(args.root).resolve()
+    adapter = _build_adapter(root)
+    fields: dict = {}
+
+    if args.assignee:
+        fields["assigneeId"] = args.assignee
+        logging.debug("update task %s: set assigneeId=%s", args.issue, args.assignee)
+
+    if args.set_tags is not None:
+        tag_ids = [t.strip() for t in args.set_tags.split(",") if t.strip()]
+        fields["tags"] = tag_ids
+        logging.debug("update task %s: set tags=%s", args.issue, tag_ids)
+
+    if args.add_tag:
+        existing = adapter.get_task(args.issue)
+        current_tags: list = existing.get("tags", [])
+        # Tags may be objects {id, name} or plain strings
+        current_ids = [t["id"] if isinstance(t, dict) else t for t in current_tags]
+        if args.add_tag not in current_ids:
+            current_ids.append(args.add_tag)
+        fields["tags"] = current_ids
+        logging.debug("update task %s: add-tag=%s result=%s", args.issue, args.add_tag, current_ids)
+
+    if not fields:
+        logging.warning("update: no fields specified for task %s", args.issue)
+        print(json.dumps({"warning": "no fields to update"}, ensure_ascii=False))
+        return 0
+
+    result = adapter.update_task(args.issue, **fields)
+    logging.debug("update task %s: done", args.issue)
     print(json.dumps(result, ensure_ascii=False, indent=2))
     return 0
 
@@ -87,8 +140,20 @@ def main() -> int:
 
     sub.add_parser("list-projects", help="List all Timetta projects")
 
+    users_p = sub.add_parser("list-users", help="List all Timetta users")
+    users_p.add_argument("--no-cache", action="store_true", help="Bypass local cache and fetch fresh data")
+
+    tags_p = sub.add_parser("list-tags", help="List all Timetta tags")
+    tags_p.add_argument("--no-cache", action="store_true", help="Bypass local cache and fetch fresh data")
+
     create_p = sub.add_parser("create", help="Create task from JSON file")
     create_p.add_argument("--input", required=True, help="Path to task JSON file")
+
+    update_p = sub.add_parser("update", help="Update task metadata (assignee, tags)")
+    update_p.add_argument("--issue", required=True, help="Task ID")
+    update_p.add_argument("--assignee", default="", help="Assignee user UUID")
+    update_p.add_argument("--set-tags", default=None, help="Comma-separated tag UUIDs (replaces all tags)")
+    update_p.add_argument("--add-tag", default="", help="Single tag UUID to add (keeps existing tags)")
 
     comment_p = sub.add_parser("add-comment", help="Add comment to task")
     comment_p.add_argument("--issue", required=True, help="Task ID")
@@ -103,7 +168,10 @@ def main() -> int:
 
     commands = {
         "list-projects": cmd_list_projects,
+        "list-users": cmd_list_users,
+        "list-tags": cmd_list_tags,
         "create": cmd_create,
+        "update": cmd_update,
         "add-comment": cmd_add_comment,
         "attach-file": cmd_attach_file,
     }

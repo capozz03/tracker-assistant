@@ -54,39 +54,59 @@ class TimettaAdapter:
         logger.debug("Got %d projects", len(items))
         return items
 
+    def get_users(self) -> list[dict[str, Any]]:
+        logger.debug("Fetching users")
+        result = self._request("GET", "/Users", params="$select=id,displayName")
+        items: list[dict[str, Any]] = result.get("value", result) if isinstance(result, dict) else result
+        logger.debug("Got %d users", len(items))
+        return items
+
+    def get_tags(self) -> list[dict[str, Any]]:
+        logger.debug("Fetching tags")
+        try:
+            result = self._request("GET", "/Tags", params="$select=id,name")
+        except RuntimeError as exc:
+            if "404" in str(exc):
+                logger.warning("Tags not supported by this Timetta instance — returning empty list")
+                return []
+            raise
+        items: list[dict[str, Any]] = result.get("value", result) if isinstance(result, dict) else result
+        logger.debug("Got %d tags", len(items))
+        return items
+
     def create_task(self, task: Task) -> dict[str, Any]:
         body = task.to_api_body()
-        logger.debug("Creating task: project=%s name=%r", task.project_id, task.summary)
-        result = self._request("POST", "/ProjectTasks", body)
-        logger.debug("Created task id=%s", result.get("id"))
+        logger.debug("[FIX] Creating task via /Issues: project=%s name=%r", task.project_id, task.summary)
+        result = self._request("POST", "/Issues", body)
+        logger.debug("[FIX] Created task id=%s", result.get("id"))
         return result
 
     def get_task(self, task_id: str) -> dict[str, Any]:
         logger.debug("Getting task %s", task_id)
-        return self._request("GET", f"/ProjectTasks('{task_id}')")
+        return self._request("GET", f"/Issues('{task_id}')")
 
     def update_task(self, task_id: str, **fields: Any) -> dict[str, Any]:
         logger.debug("Updating task %s fields=%s", task_id, list(fields.keys()))
-        return self._request("PATCH", f"/ProjectTasks('{task_id}')", fields)
+        return self._request("PATCH", f"/Issues('{task_id}')", fields)
 
     def add_comment(self, task_id: str, text: str) -> dict[str, Any] | None:
         logger.debug("Adding comment to task %s (len=%d)", task_id, len(text))
         try:
             return self._request(
                 "POST",
-                f"/ProjectTasks('{task_id}')/Comments",
+                f"/Issues('{task_id}')/Comments",
                 {"text": text},
             )
         except RuntimeError as exc:
             if "404" in str(exc):
-                logger.warning("Comments not supported for ProjectTasks — skipping (task=%s)", task_id)
+                logger.warning("Comments not supported for Issues — skipping (task=%s)", task_id)
                 return None
             raise
 
     def attach_file(self, task_id: str, filepath: str) -> dict[str, Any] | None:
         path = Path(filepath)
         logger.debug("Attaching file %s to task %s", path.name, task_id)
-        url = f"{self.BASE}/ProjectTasks('{task_id}')/Attachments"
+        url = f"{self.BASE}/Issues('{task_id}')/Attachments"
         headers = {
             "Authorization": f"Bearer {self._token}",
         }
@@ -109,7 +129,7 @@ class TimettaAdapter:
         except urllib.error.HTTPError as exc:
             payload = exc.read().decode("utf-8", errors="replace")
             if exc.code == 404:
-                logger.warning("Attachments not supported for ProjectTasks — skipping (task=%s)", task_id)
+                logger.warning("Attachments not supported for Issues — skipping (task=%s)", task_id)
                 return None
             logger.error("attach_file failed: %d %s", exc.code, payload)
             raise RuntimeError(f"attach_file {task_id} → {exc.code}: {payload}") from exc
