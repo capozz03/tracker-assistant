@@ -1,0 +1,7 @@
+{
+  "_comment": "Default task template. project_id is filled from telegram-context at runtime.",
+  "project_id": "",
+  "task_type": "968f71c6-6b38-4845-963a-b2d07ec95185",
+  "summary": "",
+  "description": ""
+}

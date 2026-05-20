@@ -1,0 +1,7 @@
+{"ts":"2026-05-20T10:06:57Z","run_id":"claude-p-enrich-20260520-100657","iteration":0,"phase":"A","step":"INIT","event":"run_started","status":"ok","payload":{"task_alias":"claude-p-enrich","max_iterations":3}}
+{"ts":"2026-05-20T10:07:30Z","run_id":"claude-p-enrich-20260520-100657","iteration":1,"phase":"A","step":"PLAN","event":"plan_created","status":"ok","payload":{}}
+{"ts":"2026-05-20T10:07:45Z","run_id":"claude-p-enrich-20260520-100657","iteration":1,"phase":"A","step":"PRODUCE","event":"artifact_created","status":"ok","payload":{"hash":"8e2a7017"}}
+{"ts":"2026-05-20T10:08:00Z","run_id":"claude-p-enrich-20260520-100657","iteration":1,"phase":"A","step":"EVALUATE","event":"evaluation_done","status":"ok","payload":{"score":1.0,"passed":true}}
+{"ts":"2026-05-20T10:08:15Z","run_id":"claude-p-enrich-20260520-100657","iteration":1,"phase":"A","step":"PHASE_SWITCH","event":"phase_switched","status":"ok","payload":{"from":"A","to":"B"}}
+{"ts":"2026-05-20T10:08:25Z","run_id":"claude-p-enrich-20260520-100657","iteration":1,"phase":"B","step":"EVALUATE","event":"evaluation_done","status":"ok","payload":{"score":1.0,"passed":true}}
+{"ts":"2026-05-20T10:08:30Z","run_id":"claude-p-enrich-20260520-100657","iteration":1,"phase":"B","step":"DONE","event":"stopped","status":"ok","payload":{"reason":"threshold_reached","final_score":1.0}}

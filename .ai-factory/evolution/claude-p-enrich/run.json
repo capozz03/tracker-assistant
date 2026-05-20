@@ -1,0 +1,154 @@
+{
+  "run_id": "claude-p-enrich-20260520-100657",
+  "task_alias": "claude-p-enrich",
+  "status": "completed",
+  "iteration": 1,
+  "max_iterations": 3,
+  "phase": "B",
+  "current_step": "DONE",
+  "task": {
+    "prompt": "Промежуточный шаг в создании задачи через скрипт: прогон через claude -p. Задача форматируется под шаблон, использует контекст кодовой базы, подсасывает теги из API (бэк/фронт) и исполнителя.",
+    "ideal_result": "scripts/enrich_task.py — Python-скрипт, принимающий сырое описание задачи (JSON), получающий теги и пользователей из Timetta API (с кешем), вызывающий claude -p для форматирования, и возвращающий готовый task.json для task_cli.py create",
+    "artifact_path": "scripts/enrich_task.py"
+  },
+  "criteria": {
+    "name": "code_generation_v1",
+    "version": 1,
+    "phase": {
+      "A": {
+        "threshold": 0.8,
+        "active_levels": [
+          "A"
+        ]
+      },
+      "B": {
+        "threshold": 0.9,
+        "active_levels": [
+          "A",
+          "B"
+        ]
+      }
+    },
+    "rules": [
+      {
+        "id": "a.correctness.compiles",
+        "description": "Код парсится без синтаксических ошибок",
+        "severity": "fail",
+        "weight": 2,
+        "phase": "A",
+        "check": "python3 -m py_compile artifact"
+      },
+      {
+        "id": "a.correctness.logic",
+        "description": "Реализует: fetch tags/users + claude -p + output task.json",
+        "severity": "fail",
+        "weight": 2,
+        "phase": "A",
+        "check": "Verify: _call_claude, load_cached(users), load_cached(tags), json output"
+      },
+      {
+        "id": "a.completeness.functions",
+        "description": "Все ключевые функции присутствуют: enrich_task, _call_claude, main",
+        "severity": "fail",
+        "weight": 2,
+        "phase": "A",
+        "check": "Verify functions: enrich_task, _call_claude, main, _build_adapter"
+      },
+      {
+        "id": "a.completeness.types",
+        "description": "Аннотации типов на публичных функциях",
+        "severity": "warn",
+        "weight": 1,
+        "phase": "A",
+        "check": "Verify type hints on function signatures"
+      },
+      {
+        "id": "b.quality.error-handling",
+        "description": "Обработка граничных случаев: нет claude CLI, ошибка API, невалидный JSON",
+        "severity": "warn",
+        "weight": 1,
+        "phase": "B",
+        "check": "Verify SystemExit for: missing claude, API error, invalid JSON from claude"
+      },
+      {
+        "id": "b.quality.logging",
+        "description": "logging.debug для ключевых операций",
+        "severity": "warn",
+        "weight": 1,
+        "phase": "B",
+        "check": "Verify logger.debug calls for: claude call, API fetch, output"
+      },
+      {
+        "id": "b.style.conventions",
+        "description": "Соответствует конвенциям проекта: snake_case, SystemExit, stdlib only",
+        "severity": "warn",
+        "weight": 1,
+        "phase": "B",
+        "check": "Verify snake_case, SystemExit for fatal errors, no pip-only deps"
+      },
+      {
+        "id": "b.security.input-validation",
+        "description": "Валидация входных данных: файл существует, токен задан, JSON валиден",
+        "severity": "fail",
+        "weight": 2,
+        "phase": "B",
+        "check": "Verify validation: file exists check, TIMETTA_TOKEN check, json.loads with error handling"
+      }
+    ]
+  },
+  "plan": [
+    {
+      "step": 1,
+      "focus": "Complete scripts/enrich_task.py implementation"
+    },
+    {
+      "step": 2,
+      "key": "ENRICHMENT_PROMPT_TEMPLATE as module constant with {raw_task}/{tags}/{users}/{codebase_hint}"
+    },
+    {
+      "step": 3,
+      "key": "_call_claude via subprocess.run([claude,-p,prompt])"
+    },
+    {
+      "step": 4,
+      "key": "enrich_task orchestrates: fetch tags+users, build prompt, call claude, return dict"
+    },
+    {
+      "step": 5,
+      "key": "main: argparse --input/--output/--root/--no-cache/--log-level, SystemExit for fatal errors"
+    }
+  ],
+  "prepared_checks": null,
+  "evaluation": {
+    "phase_A": {
+      "score": 1.0,
+      "passed": true,
+      "rules": {
+        "a.correctness.compiles": "PASS",
+        "a.correctness.logic": "PASS",
+        "a.completeness.functions": "PASS",
+        "a.completeness.types": "PASS"
+      }
+    },
+    "phase_B": {
+      "score": 1.0,
+      "passed": true,
+      "rules": {
+        "b.quality.error-handling": "PASS",
+        "b.quality.logging": "PASS",
+        "b.style.conventions": "PASS",
+        "b.security.input-validation": "PASS"
+      }
+    },
+    "final_score": 1.0
+  },
+  "critique": null,
+  "stop": {
+    "passed": true,
+    "reason": "threshold_reached"
+  },
+  "last_score": 1.0,
+  "stagnation_count": 0,
+  "created_at": "2026-05-20T10:06:57Z",
+  "updated_at": "2026-05-20T10:08:30Z"
+}
