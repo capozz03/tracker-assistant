@@ -207,7 +207,7 @@ class TestHandlePhoto:
 
         async def run_test():
             with patch(
-                "tracker_assistant.telegram.handlers.build_adapter",
+                "tracker_assistant.telegram.handlers._build_adapter",
                 return_value=fake_adapter,
             ):
                 await handle_photo(update, context)

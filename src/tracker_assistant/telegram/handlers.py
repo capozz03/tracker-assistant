@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import tempfile
+import time
 from pathlib import Path
 from typing import Any
 
@@ -17,8 +19,9 @@ from telegram.ext import (
     filters,
 )
 
-from ..submit import build_adapter, submit_requirements
-from ..shared.io_utils import load_cached
+from ..submit import submit_requirements
+from ..shared.io_utils import load_cached, load_env
+from ..timetta import TimettaAdapter
 from .config import BotConfig, ProjectConfig
 from .projects import ProjectRegistry
 from .vps_sync import sync_codebase
@@ -55,6 +58,27 @@ def _format_results(results: list[dict[str, Any]]) -> str:
     return "\n".join(lines)
 
 
+def _build_adapter(root: Path) -> TimettaAdapter:
+    """Build TimettaAdapter from .env in root.
+
+    Reads TIMETTA_TOKEN (and optionally TIMETTA_TAGS_DIR_ID) from .env,
+    with environment variables taking precedence.
+
+    Raises:
+        SystemExit: if TIMETTA_TOKEN is not set.
+    """
+    env = load_env(root)
+    token = env.get("TIMETTA_TOKEN") or os.environ.get("TIMETTA_TOKEN", "")
+    if not token:
+        raise SystemExit("ERROR: TIMETTA_TOKEN не задан (добавь в .env)")
+    tags_dir_id = (
+        env.get("TIMETTA_TAGS_DIR_ID")
+        or os.environ.get("TIMETTA_TAGS_DIR_ID", "")
+        or TimettaAdapter.DEFAULT_TAGS_DIR_ID
+    )
+    return TimettaAdapter(token=token, tags_dir_id=tags_dir_id)
+
+
 def _run_submit(
     text: str,
     project: ProjectConfig,
@@ -62,7 +86,7 @@ def _run_submit(
     project_path_override: Path | None = None,
 ) -> list[dict[str, Any]]:
     """Synchronous wrapper that builds adapter and calls submit_requirements."""
-    adapter = build_adapter(root)
+    adapter = _build_adapter(root)
     users = load_cached(root, "users", adapter.get_users)
     tags = load_cached(root, "tags", adapter.get_tags)
     effective_path = project_path_override if project_path_override is not None else project.project_path
@@ -97,7 +121,6 @@ async def _maybe_sync_vps(
     """
     if not project.vps_remote:
         return None
-    import time  # noqa: PLC0415
     await update.message.reply_text("🔄 Синхронизирую кодовую базу…")
     remote = project.vps_remote
     t0 = time.monotonic()
@@ -177,114 +200,33 @@ def make_handlers(
         context.user_data["last_task_ids"] = [r["id"] for r in results]
         await update.message.reply_text(_format_results(results))
 
-    async def handle_photo(
-        update: Update, context: ContextTypes.DEFAULT_TYPE
+    async def _handle_media_message(
+        update: Update,
+        context: ContextTypes.DEFAULT_TYPE,
+        *,
+        file_id: str,
+        filename: str,
+        caption: str,
+        media_label: str,
+        tg_obj: Any,
     ) -> None:
-        """Handle photo messages: submit caption (if any) then attach photo."""
+        """Shared logic for photo and document handlers.
+
+        If *caption* is non-empty: submits it as requirements, stores task IDs,
+        then downloads and attaches the file to each created task.
+        If *caption* is empty: attaches to ``context.user_data["last_task_ids"]``.
+
+        Args:
+            update: Telegram Update.
+            context: Handler context (user_data used for last_task_ids).
+            file_id: Telegram file_id (used as temp filename prefix).
+            filename: Original filename (determines extension + temp path).
+            caption: Message caption or empty string.
+            media_label: Human-readable label for reply messages ("фото" / "файл").
+            tg_obj: Telegram object with a ``.get_file()`` coroutine (PhotoSize or Document).
+        """
         assert update.message is not None  # noqa: S101
         chat_id = update.effective_chat.id if update.effective_chat else 0
-
-        # Largest available photo resolution
-        photo = update.message.photo[-1]
-        logger.info(
-            "[tg] photo: chat=%s file_id=%s",
-            chat_id,
-            photo.file_id,
-        )
-
-        caption = update.message.caption or ""
-        task_ids: list[str] = []
-
-        if caption.strip():
-            # Submit caption as requirements, then attach photo
-            try:
-                project = registry.get_project(chat_id)
-            except KeyError:
-                await update.message.reply_text(
-                    "❌ Проект не настроен. Добавьте запись в telegram_projects.json."
-                )
-                return
-
-            if not project.project_id:
-                await update.message.reply_text(
-                    "❌ project_id не задан. Проверьте конфигурацию."
-                )
-                return
-
-            vps_cache = config.root / "cache" / "vps"
-            project_path_override = await _maybe_sync_vps(update, project, vps_cache)
-            await update.message.reply_text("⏳ Создаю задачи…")
-            try:
-                results = await asyncio.to_thread(
-                    _run_submit, caption, project, config.root, project_path_override
-                )
-            except Exception as exc:
-                logger.exception("[tg] photo submit failed: chat=%s", chat_id)
-                await update.message.reply_text(f"❌ Ошибка создания задач: {exc}")
-                return
-
-            task_ids = [r["id"] for r in results]
-            context.user_data["last_task_ids"] = task_ids
-            await update.message.reply_text(_format_results(results))
-        else:
-            # No caption — attach to last created tasks
-            task_ids = context.user_data.get("last_task_ids", [])
-            if not task_ids:
-                await update.message.reply_text(
-                    "⚠️ Нет задач для прикрепления. Сначала отправьте текст с требованиями."
-                )
-                return
-
-        # Download and attach photo
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            tmp_path = Path(tmp_dir) / f"{photo.file_id}.jpg"
-            tg_file = await photo.get_file()
-            await tg_file.download_to_drive(tmp_path)
-
-            file_size = tmp_path.stat().st_size
-            logger.info(
-                "[tg] photo: chat=%s file_size=%d", chat_id, file_size
-            )
-
-            try:
-                adapter = build_adapter(config.root)
-            except SystemExit as exc:
-                await update.message.reply_text(f"❌ Ошибка конфигурации: {exc}")
-                return
-
-            attached = 0
-            for task_id in task_ids:
-                if not task_id:
-                    continue
-                result = await asyncio.to_thread(
-                    adapter.attach_file, task_id, str(tmp_path)
-                )
-                if result is not None:
-                    attached += 1
-
-        if attached:
-            await update.message.reply_text(
-                f"📎 Фото прикреплено к {attached} задач{'е' if attached == 1 else 'ам'}."
-            )
-        else:
-            await update.message.reply_text(
-                "⚠️ Не удалось прикрепить фото (Timetta может не поддерживать вложения)."
-            )
-
-    async def handle_document(
-        update: Update, context: ContextTypes.DEFAULT_TYPE
-    ) -> None:
-        """Handle document/file messages: attach to last tasks."""
-        assert update.message is not None  # noqa: S101
-        chat_id = update.effective_chat.id if update.effective_chat else 0
-        doc = update.message.document
-        if doc is None:
-            return
-        logger.info(
-            "[tg] document: chat=%s file_name=%s", chat_id, doc.file_name
-        )
-
-        caption = update.message.caption or ""
         task_ids: list[str] = []
 
         if caption.strip():
@@ -310,7 +252,7 @@ def make_handlers(
                     _run_submit, caption, project, config.root, project_path_override
                 )
             except Exception as exc:
-                logger.exception("[tg] doc submit failed: chat=%s", chat_id)
+                logger.exception("[tg] media submit failed: chat=%s", chat_id)
                 await update.message.reply_text(f"❌ Ошибка создания задач: {exc}")
                 return
 
@@ -326,14 +268,17 @@ def make_handlers(
                 return
 
         # Download and attach
-        suffix = Path(doc.file_name or "file").suffix or ".bin"
+        suffix = Path(filename).suffix or ".bin"
         with tempfile.TemporaryDirectory() as tmp_dir:
-            tmp_path = Path(tmp_dir) / f"{doc.file_id}{suffix}"
-            tg_file = await doc.get_file()
+            tmp_path = Path(tmp_dir) / f"{file_id}{suffix}"
+            tg_file = await tg_obj.get_file()
             await tg_file.download_to_drive(tmp_path)
 
+            file_size = tmp_path.stat().st_size
+            logger.info("[tg] %s: chat=%s file_size=%d", media_label, chat_id, file_size)
+
             try:
-                adapter = build_adapter(config.root)
+                adapter = _build_adapter(config.root)
             except SystemExit as exc:
                 await update.message.reply_text(f"❌ Ошибка конфигурации: {exc}")
                 return
@@ -348,14 +293,51 @@ def make_handlers(
                 if result is not None:
                     attached += 1
 
+        n = "е" if attached == 1 else "ам"
         if attached:
             await update.message.reply_text(
-                f"📎 Файл прикреплён к {attached} задач{'е' if attached == 1 else 'ам'}."
+                f"📎 {media_label.capitalize()} прикреплено к {attached} задач{n}."
             )
         else:
             await update.message.reply_text(
-                "⚠️ Не удалось прикрепить файл (Timetta может не поддерживать вложения)."
+                f"⚠️ Не удалось прикрепить {media_label} (Timetta может не поддерживать вложения)."
             )
+
+    async def handle_photo(
+        update: Update, context: ContextTypes.DEFAULT_TYPE
+    ) -> None:
+        """Handle photo messages: submit caption (if any) then attach photo."""
+        assert update.message is not None  # noqa: S101
+        chat_id = update.effective_chat.id if update.effective_chat else 0
+        photo = update.message.photo[-1]
+        logger.info("[tg] photo: chat=%s file_id=%s", chat_id, photo.file_id)
+        await _handle_media_message(
+            update, context,
+            file_id=photo.file_id,
+            filename=f"{photo.file_id}.jpg",
+            caption=update.message.caption or "",
+            media_label="фото",
+            tg_obj=photo,
+        )
+
+    async def handle_document(
+        update: Update, context: ContextTypes.DEFAULT_TYPE
+    ) -> None:
+        """Handle document/file messages: attach to last tasks."""
+        assert update.message is not None  # noqa: S101
+        chat_id = update.effective_chat.id if update.effective_chat else 0
+        doc = update.message.document
+        if doc is None:
+            return
+        logger.info("[tg] document: chat=%s file_name=%s", chat_id, doc.file_name)
+        await _handle_media_message(
+            update, context,
+            file_id=doc.file_id,
+            filename=doc.file_name or "file.bin",
+            caption=update.message.caption or "",
+            media_label="файл",
+            tg_obj=doc,
+        )
 
     # ------------------------------------------------------------------
     # Slash commands

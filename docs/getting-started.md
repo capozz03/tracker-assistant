@@ -32,7 +32,7 @@ TIMETTA_PROJECT_ID=your_project_uuid
 | Переменная | Обязательна | Описание |
 |---|---|---|
 | `TIMETTA_TOKEN` | да | Bearer-токен Timetta |
-| `TIMETTA_PROJECT_ID` | нет | UUID проекта по умолчанию (для `submit_task.py`) |
+| `TIMETTA_PROJECT_ID` | нет | UUID проекта по умолчанию (для `task-submit` и `task-telegram` без `telegram_projects.json`) |
 | `TIMETTA_TAGS_DIR_ID` | нет | ID директории тегов (дефолт работает для стандартных инстансов) |
 
 **Где взять токен:** Timetta → Настройки аккаунта → API → создать токен доступа.
