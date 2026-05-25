@@ -170,7 +170,7 @@ TELEGRAM_TOKEN=your_bot_token_from_botfather
 
 ### Фаза 4 — CLI и конфигурация
 
-- [ ] 10. **`telegram/cli.py`** + entry point
+- [x] 10. **`telegram/cli.py`** + entry point
   - `main() -> int` — парсинг аргументов: `--root`, `--log-level`, `--dry-run` (не запускает polling, только валидирует конфиг)
   - `load_config(root) → run_bot(config)`
   - Добавить в `pyproject.toml`: `task-telegram = "tracker_assistant.telegram.cli:main"`

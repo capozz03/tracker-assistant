@@ -1,0 +1,14 @@
+{
+  "default": {
+    "project_id": "timetta-project-uuid",
+    "sprint_id": "",
+    "project_path": null,
+    "vps_remote": null
+  },
+  "chat_123456789": {
+    "project_id": "another-timetta-project-uuid",
+    "sprint_id": "sprint-uuid",
+    "project_path": null,
+    "vps_remote": "user@vps.example.com:/srv/myproject"
+  }
+}

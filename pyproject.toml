@@ -8,9 +8,10 @@ dependencies = [
 ]
 
 [project.scripts]
-task-cli     = "tracker_assistant.timetta.cli:main"
-task-submit  = "tracker_assistant.submit.cli:main"
-task-enrich  = "tracker_assistant.enrich.cli:main"
+task-cli      = "tracker_assistant.timetta.cli:main"
+task-submit   = "tracker_assistant.submit.cli:main"
+task-enrich   = "tracker_assistant.enrich.cli:main"
+task-telegram = "tracker_assistant.telegram.cli:main"
 
 [dependency-groups]
 dev = ["pytest>=8.0"]
