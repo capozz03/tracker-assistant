@@ -132,7 +132,7 @@ TELEGRAM_TOKEN=your_bot_token_from_botfather
 
 ### Фаза 3 — VPS-синхронизация
 
-- [ ] 8. **`telegram/vps_sync.py`** — прототип синхронизации кодовой базы
+- [x] 8. **`telegram/vps_sync.py`** — прототип синхронизации кодовой базы
   - `SyncStrategy` enum: `LOCAL`, `SSH_RSYNC`, `GIT_CLONE`
   - `detect_strategy(path_spec: str) -> SyncStrategy`:
     - `user@host:/path` или `host:/path` → `SSH_RSYNC`
@@ -152,7 +152,7 @@ TELEGRAM_TOKEN=your_bot_token_from_botfather
   - `get_last_sync_time(local: Path) -> datetime | None` — читает `.sync_timestamp`
   - Файл: `src/tracker_assistant/telegram/vps_sync.py`
 
-- [ ] 9. **Интеграция VPS-sync в хендлеры**
+- [x] 9. **Интеграция VPS-sync в хендлеры**
   - Добавить в `handlers.py`: перед вызовом `submit_requirements`, если `project.vps_remote` задан:
     ```python
     project_path = await asyncio.to_thread(

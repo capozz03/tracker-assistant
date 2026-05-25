@@ -21,6 +21,7 @@ from ..submit import build_adapter, submit_requirements
 from ..shared.io_utils import load_cached
 from .config import BotConfig, ProjectConfig
 from .projects import ProjectRegistry
+from .vps_sync import sync_codebase
 
 logger = logging.getLogger(__name__)
 
@@ -58,21 +59,54 @@ def _run_submit(
     text: str,
     project: ProjectConfig,
     root: Path,
+    project_path_override: Path | None = None,
 ) -> list[dict[str, Any]]:
     """Synchronous wrapper that builds adapter and calls submit_requirements."""
     adapter = build_adapter(root)
     users = load_cached(root, "users", adapter.get_users)
     tags = load_cached(root, "tags", adapter.get_tags)
+    effective_path = project_path_override if project_path_override is not None else project.project_path
     return submit_requirements(
         requirements=text,
         project_id=project.project_id,
         adapter=adapter,
         users=users,
         tags=tags,
-        project_path=project.project_path,
+        project_path=effective_path,
         root=root,
         sprint_id=project.sprint_id,
     )
+
+
+async def _maybe_sync_vps(
+    update: Any,
+    project: ProjectConfig,
+    cache_dir: Path,
+) -> Path | None:
+    """Sync VPS codebase if project.vps_remote is configured.
+
+    Sends a status message to the user while syncing.
+
+    Args:
+        update: Telegram Update with an active message.
+        project: ProjectConfig that may have vps_remote set.
+        cache_dir: Base directory for cached codebases.
+
+    Returns:
+        Resolved local Path after sync, or None if no vps_remote.
+    """
+    if not project.vps_remote:
+        return None
+    import time  # noqa: PLC0415
+    await update.message.reply_text("🔄 Синхронизирую кодовую базу…")
+    remote = project.vps_remote
+    t0 = time.monotonic()
+    local = await asyncio.to_thread(sync_codebase, remote, cache_dir)
+    elapsed = time.monotonic() - t0
+    logger.info(
+        "[tg] vps_sync: %s → %s (%.1fs)", remote, local, elapsed
+    )
+    return local
 
 
 # ---------------------------------------------------------------------------
@@ -125,10 +159,14 @@ def make_handlers(
             )
             return
 
+        # VPS sync before submit (if configured)
+        vps_cache = config.root / "cache" / "vps"
+        project_path_override = await _maybe_sync_vps(update, project, vps_cache)
+
         await update.message.reply_text("⏳ Создаю задачи…")
         try:
             results = await asyncio.to_thread(
-                _run_submit, text, project, config.root
+                _run_submit, text, project, config.root, project_path_override
             )
         except Exception as exc:
             logger.exception("[tg] submit failed: chat=%s", chat_id)
@@ -173,10 +211,12 @@ def make_handlers(
                 )
                 return
 
+            vps_cache = config.root / "cache" / "vps"
+            project_path_override = await _maybe_sync_vps(update, project, vps_cache)
             await update.message.reply_text("⏳ Создаю задачи…")
             try:
                 results = await asyncio.to_thread(
-                    _run_submit, caption, project, config.root
+                    _run_submit, caption, project, config.root, project_path_override
                 )
             except Exception as exc:
                 logger.exception("[tg] photo submit failed: chat=%s", chat_id)
@@ -262,10 +302,12 @@ def make_handlers(
                 )
                 return
 
+            vps_cache = config.root / "cache" / "vps"
+            project_path_override = await _maybe_sync_vps(update, project, vps_cache)
             await update.message.reply_text("⏳ Создаю задачи…")
             try:
                 results = await asyncio.to_thread(
-                    _run_submit, caption, project, config.root
+                    _run_submit, caption, project, config.root, project_path_override
                 )
             except Exception as exc:
                 logger.exception("[tg] doc submit failed: chat=%s", chat_id)
