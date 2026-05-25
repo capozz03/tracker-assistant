@@ -6,8 +6,9 @@ requires-python = ">=3.10"
 dependencies = []
 
 [project.scripts]
-task-cli = "scripts.task_cli:main"
-enrich-task = "scripts.enrich_task:main"
+task-cli     = "tracker_assistant.timetta.cli:main"
+task-submit  = "tracker_assistant.submit.cli:main"
+task-enrich  = "tracker_assistant.enrich.cli:main"
 
 [dependency-groups]
 dev = ["pytest>=8.0"]

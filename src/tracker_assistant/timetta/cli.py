@@ -4,13 +4,7 @@ import argparse
 import json
 import logging
 import os
-import sys
 from pathlib import Path
-
-ROOT = Path(__file__).resolve().parents[1]
-SRC = ROOT / "src"
-if str(SRC) not in sys.path:
-    sys.path.insert(0, str(SRC))
 
 from tracker_assistant.timetta.adapter import TimettaAdapter
 from tracker_assistant.timetta.models import Task
@@ -105,7 +99,6 @@ def cmd_update(args: argparse.Namespace) -> int:
     if args.add_tag:
         existing = adapter.get_task(args.issue)
         current_tags: list = existing.get("tags", [])
-        # Tags may be objects {id, name} or plain strings
         current_ids = [t["id"] if isinstance(t, dict) else t for t in current_tags]
         if args.add_tag not in current_ids:
             current_ids.append(args.add_tag)

@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-"""submit_task.py — тонкая CLI-обёртка над tracker_assistant.submit.
+"""submit cli — тонкая CLI-обёртка над tracker_assistant.submit.
 
 Использование:
-    uv run python scripts/submit_task.py \\
+    uv run task-submit \\
         --requirements-file tasks.md \\
         --project-id <uuid> \\
         --sprint-id <uuid>
@@ -17,11 +17,6 @@ import logging
 import os
 import sys
 from pathlib import Path
-
-ROOT = Path(__file__).resolve().parents[1]
-SRC = ROOT / "src"
-if str(SRC) not in sys.path:
-    sys.path.insert(0, str(SRC))
 
 from tracker_assistant.submit import submit_requirements, build_adapter
 from tracker_assistant.shared.io_utils import load_cached, load_env

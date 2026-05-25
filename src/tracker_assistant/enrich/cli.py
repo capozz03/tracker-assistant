@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-"""enrich_task.py — тонкая CLI-обёртка над tracker_assistant.enrich."""
+"""enrich cli — тонкая CLI-обёртка над tracker_assistant.enrich."""
 
 import argparse
 import json
@@ -8,11 +8,6 @@ import logging
 import sys
 from pathlib import Path
 from typing import Any
-
-ROOT = Path(__file__).resolve().parents[1]
-SRC = ROOT / "src"
-if str(SRC) not in sys.path:
-    sys.path.insert(0, str(SRC))
 
 from tracker_assistant.enrich import enrich_task, build_adapter
 from tracker_assistant.shared.io_utils import load_cached
