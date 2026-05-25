@@ -1,0 +1,14 @@
+.env
+.env.*
+!.env.example
+cache/
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+.ai-factory/
+tests/
+.claude/
+.git/
+*.md
+!README.md

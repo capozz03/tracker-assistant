@@ -1,0 +1,9 @@
+services:
+  tracker:
+    build:
+      target: dev
+    environment:
+      - LOG_LEVEL=DEBUG
+    volumes:
+      - ./src:/app/src:ro
+      - ./cache:/app/cache

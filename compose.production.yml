@@ -1,0 +1,8 @@
+services:
+  tracker:
+    build:
+      target: prod
+    environment:
+      - LOG_LEVEL=WARNING
+    restart: unless-stopped
+    volumes: []
