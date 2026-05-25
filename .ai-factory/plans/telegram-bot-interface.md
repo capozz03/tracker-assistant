@@ -186,7 +186,7 @@ TELEGRAM_TOKEN=your_bot_token_from_botfather
 ### Фаза 5 — Тесты
 
 <!-- parallel: tasks 11, 12, 13 -->
-- [ ] 11. **Тесты config и projects**
+- [x] 11. **Тесты config и projects**
   - `tests/test_telegram_config.py`:
     - `test_load_config_from_env` — TELEGRAM_TOKEN из env, default project из TIMETTA_PROJECT_ID
     - `test_load_config_with_projects_json` — загрузка из `telegram_projects.json`
@@ -197,7 +197,7 @@ TELEGRAM_TOKEN=your_bot_token_from_botfather
     - `test_list_projects` — возвращает все проекты
   - Файлы: `tests/test_telegram_config.py`, `tests/test_telegram_projects.py`
 
-- [ ] 12. **Тесты хендлеров**
+- [x] 12. **Тесты хендлеров**
   - `tests/test_telegram_handlers.py`:
     - Мок `Update` и `Context` через `unittest.mock.AsyncMock`
     - `test_handle_text_calls_submit` — текст → вызывает `submit_requirements` с правильными аргументами
@@ -207,7 +207,7 @@ TELEGRAM_TOKEN=your_bot_token_from_botfather
     - `test_handle_text_no_project_error` — нет default проекта → graceful error reply
   - Файл: `tests/test_telegram_handlers.py`
 
-- [ ] 13. **Тесты VPS sync**
+- [x] 13. **Тесты VPS sync**
   - `tests/test_telegram_vps_sync.py`:
     - `test_detect_strategy_ssh_rsync` — `user@host:/path` → `SSH_RSYNC`
     - `test_detect_strategy_git_clone` — `https://github.com/...` → `GIT_CLONE`
