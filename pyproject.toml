@@ -3,7 +3,9 @@ name = "tracker-assistant"
 version = "0.1.0"
 description = "Minimalist Python client for Yandex Tracker"
 requires-python = ">=3.10"
-dependencies = []
+dependencies = [
+    "python-telegram-bot[job-queue]>=20.0",
+]
 
 [project.scripts]
 task-cli     = "tracker_assistant.timetta.cli:main"
