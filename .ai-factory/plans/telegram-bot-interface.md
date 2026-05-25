@@ -99,7 +99,7 @@ TELEGRAM_TOKEN=your_bot_token_from_botfather
 
 ### Фаза 2 — Хендлеры
 
-- [ ] 5. **`telegram/handlers.py`** — текстовые сообщения
+- [x] 5. **`telegram/handlers.py`** — текстовые сообщения
   - `make_handlers(registry: ProjectRegistry, adapter_factory, cache_loader) -> list[BaseHandler]`
   - `_handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE)` — async handler
   - Извлечение текста: `update.message.text` (обычный) или `update.message.caption` (фото)
@@ -109,7 +109,7 @@ TELEGRAM_TOKEN=your_bot_token_from_botfather
   - Лог: `logger.info("[tg] text: chat=%s len=%d", chat_id, len(text))`
   - Файл: `src/tracker_assistant/telegram/handlers.py`
 
-- [ ] 6. **Фото-хендлер** — добавить в `handlers.py`
+- [x] 6. **Фото-хендлер** — добавить в `handlers.py`
   - `_handle_photo(update, context)` — async handler для `MessageHandler(filters.PHOTO, ...)`
   - Скачивает наибольшее фото: `await update.message.photo[-1].get_file()` → `await file.download_to_drive(tmp_path)`
   - Если есть `message.caption` → сначала `submit_requirements(caption)`, затем `attach_file(task_id, tmp_path)` для каждой созданной задачи
@@ -118,7 +118,7 @@ TELEGRAM_TOKEN=your_bot_token_from_botfather
   - Лог: `logger.info("[tg] photo: chat=%s file_size=%d", chat_id, file_size)`
   - Файл: `src/tracker_assistant/telegram/handlers.py` (добавить в тот же файл)
 
-- [ ] 7. **Document-хендлер** + **вспомогательные команды** — добавить в `handlers.py`
+- [x] 7. **Document-хендлер** + **вспомогательные команды** — добавить в `handlers.py`
   - `_handle_document(update, context)` — аналогично фото, для `filters.Document.ALL`; скачивает файл, прикрепляет к задачам
   - `/start` → приветственное сообщение с инструкцией
   - `/project` → показать текущий проект чата (project_id, sprint_id)
