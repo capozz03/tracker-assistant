@@ -148,8 +148,25 @@ uv run python scripts/task_cli.py list-tags --no-cache
 uv run pytest tests/ -v
 ```
 
+## Telegram Bot (`task-telegram`)
+
+Запуск бота для управления задачами через Telegram:
+
+1. Добавьте в `.env`:
+   ```env
+   TELEGRAM_TOKEN=your_bot_token_from_botfather
+   ```
+2. Запустите:
+   ```bash
+   uv run task-telegram
+   ```
+3. Отправьте боту текст с требованиями — он создаст задачи и ответит ссылками.
+
+Подробности — [Telegram Bot](telegram-bot.md).
+
 ## See Also
 
 - [Submit Pipeline](submit-pipeline.md) — авто-создание задач из требований
 - [API-справочник](api-reference.md) — Task dataclass, методы адаптера, форматы
 - [Timetta API: нюансы](timetta-quirks.md) — подводные камни и нюансы интеграции
+- [Telegram Bot](telegram-bot.md) — бот для управления задачами через Telegram

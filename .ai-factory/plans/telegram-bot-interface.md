@@ -223,7 +223,7 @@ TELEGRAM_TOKEN=your_bot_token_from_botfather
 
 ### Фаза 6 — Документация
 
-- [ ] 14. **Docs checkpoint** — `/aif-docs`
+- [x] 14. **Docs checkpoint** — `/aif-docs`
   - `docs/telegram-bot.md` — установка, конфигурация, запуск, примеры команд бота
   - Обновить `README.md` — добавить `task-telegram` в таблицу CLI-команд, раздел "Telegram Bot"
   - Обновить `docs/getting-started.md` — секция Telegram Bot

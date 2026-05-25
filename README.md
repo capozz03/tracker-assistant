@@ -29,10 +29,12 @@ uv run python scripts/submit_task.py \
 ## Возможности
 
 - **Submit pipeline** — текст требований → анализ стека → разбивка на задачи → создание в Timetta
+- **Telegram Bot** — создание задач через бот: текст, фото, документы, пересланные сообщения
 - **Создание задачи** — с названием, описанием, тегами, исполнителем, спринтом
 - **Обогащение задачи** — `enrich-task` форматирует сырое описание через `claude -p`
 - **Комментарии и вложения** — добавить к задаче сразу после создания
 - **Список пользователей и тегов** — `list-users`, `list-tags` с кешированием на 24 ч
+- **VPS-синхронизация** — бот синхронизирует кодовую базу через rsync/git перед анализом
 - **Verbose-логирование** — все HTTP-запросы в DEBUG-режиме
 
 ## Пример: task.json
@@ -48,7 +50,16 @@ uv run python scripts/submit_task.py \
 }
 ```
 
-## task_cli.py — команды
+## CLI-команды
+
+| Команда | Точка входа | Описание |
+|---|---|---|
+| `uv run task-cli` | `task_cli.py` | Управление задачами через CLI |
+| `uv run task-submit` | `submit.cli` | Создание задач из требований |
+| `uv run task-enrich` | `enrich.cli` | Обогащение задачи через LLM |
+| `uv run task-telegram` | `telegram.cli` | Запуск Telegram-бота |
+
+### task-cli — команды
 
 | Команда | Описание |
 |---|---|
@@ -59,6 +70,19 @@ uv run python scripts/submit_task.py \
 | `update --issue ID --field value` | Обновить поля задачи |
 | `add-comment --issue ID --text "..."` | Добавить комментарий |
 | `attach-file --issue ID --file path` | Прикрепить файл |
+
+### task-telegram — Telegram Bot
+
+```bash
+# Запустить бота (TELEGRAM_TOKEN должен быть в .env)
+uv run task-telegram
+
+# Проверить конфиг без запуска
+uv run task-telegram --dry-run
+
+# Отладочное логирование
+uv run task-telegram --log-level DEBUG
+```
 
 ```bash
 uv run python scripts/task_cli.py list-users
@@ -111,6 +135,7 @@ print(result["id"])
 |---|---|
 | [Начало работы](docs/getting-started.md) | Установка, .env, первый запуск |
 | [Submit Pipeline](docs/submit-pipeline.md) | Автосоздание задач из требований |
+| [Telegram Bot](docs/telegram-bot.md) | Установка, конфигурация, команды бота |
 | [API-справочник](docs/api-reference.md) | Task, TimettaAdapter, CLI-команды |
 | [Timetta API: нюансы](docs/timetta-quirks.md) | Подводные камни OData v4 интеграции |
 | [OpenAPI Spec](docs/timetta-openapi.yaml) | Swagger-спецификация для новых интеграций |
