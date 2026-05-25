@@ -13,7 +13,8 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from tracker_assistant.adapters.timetta_adapter import TimettaAdapter
+from tracker_assistant.timetta.adapter import TimettaAdapter
+from tracker_assistant.shared.claude_client import call_claude
 
 
 def _make_adapter() -> TimettaAdapter:
@@ -77,21 +78,18 @@ class TestGetTagsDirectoryEntries:
 
 
 # ---------------------------------------------------------------------------
-# _call_claude — markdown code fence stripping
+# call_claude — markdown code fence stripping (shared.claude_client)
 # ---------------------------------------------------------------------------
 
 class TestCallClaudeStripFences:
     def _run(self, stdout: str):
-        ROOT = Path(__file__).resolve().parents[1]
-        import scripts.enrich_task as et
-
         mock_result = MagicMock()
         mock_result.returncode = 0
         mock_result.stdout = stdout
         mock_result.stderr = ""
 
         with patch("subprocess.run", return_value=mock_result):
-            return et._call_claude("test prompt")
+            return call_claude("test prompt")
 
     def test_parses_plain_json(self):
         result = self._run('{"summary": "ok", "tags": []}')
@@ -113,9 +111,6 @@ class TestCallClaudeStripFences:
             self._run(wrapped)
 
     def test_raises_on_nonzero_exit(self):
-        ROOT = Path(__file__).resolve().parents[1]
-        import scripts.enrich_task as et
-
         mock_result = MagicMock()
         mock_result.returncode = 1
         mock_result.stdout = ""
@@ -123,4 +118,4 @@ class TestCallClaudeStripFences:
 
         with patch("subprocess.run", return_value=mock_result):
             with pytest.raises(SystemExit, match="claude -p"):
-                et._call_claude("test prompt")
+                call_claude("test prompt")

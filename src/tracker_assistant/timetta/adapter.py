@@ -8,7 +8,7 @@ import urllib.request
 from pathlib import Path
 from typing import Any
 
-from ..models import Task
+from .models import Task
 
 logger = logging.getLogger(__name__)
 

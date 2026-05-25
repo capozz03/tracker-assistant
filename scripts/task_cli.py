@@ -12,10 +12,10 @@ SRC = ROOT / "src"
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
-from tracker_assistant.adapters.timetta_adapter import TimettaAdapter
-from tracker_assistant.io_utils import load_cached, load_env
-from tracker_assistant.models import Task
-from tracker_assistant.pipeline import create_task, list_projects
+from tracker_assistant.timetta.adapter import TimettaAdapter
+from tracker_assistant.timetta.models import Task
+from tracker_assistant.timetta.service import create_task, list_projects
+from tracker_assistant.shared.io_utils import load_cached, load_env
 
 
 def _build_adapter(root: Path) -> TimettaAdapter:

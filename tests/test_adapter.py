@@ -11,8 +11,8 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from tracker_assistant.adapters.timetta_adapter import TimettaAdapter
-from tracker_assistant.models import Task
+from tracker_assistant.timetta.adapter import TimettaAdapter
+from tracker_assistant.timetta.models import Task
 
 
 def _make_adapter() -> TimettaAdapter:

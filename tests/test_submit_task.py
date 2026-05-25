@@ -1,4 +1,4 @@
-"""Tests for scripts/submit_task.py — stack scanner and _call_claude."""
+"""Tests for submit module: stack scanner, prompt utils, claude client."""
 from __future__ import annotations
 
 import json
@@ -12,7 +12,9 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "src"))
 
-import scripts.submit_task as st
+from tracker_assistant.submit.stack_detector import scan_project_stack
+from tracker_assistant.submit.prompt import resolve_tags
+from tracker_assistant.shared.claude_client import call_claude_list
 
 
 # ---------------------------------------------------------------------------
@@ -21,26 +23,26 @@ import scripts.submit_task as st
 
 class TestScanProjectStack:
     def test_nonexistent_path_returns_empty(self, tmp_path):
-        result = st.scan_project_stack(tmp_path / "does_not_exist")
+        result = scan_project_stack(tmp_path / "does_not_exist")
         assert result["has_frontend"] is False
         assert result["has_backend"] is False
         assert result["technologies"] == []
 
     def test_detects_frontend_from_tsx_files(self, tmp_path):
         (tmp_path / "App.tsx").write_text("export default function App() {}")
-        result = st.scan_project_stack(tmp_path)
+        result = scan_project_stack(tmp_path)
         assert result["has_frontend"] is True
 
     def test_detects_backend_from_py_files(self, tmp_path):
         (tmp_path / "main.py").write_text("print('hello')")
-        result = st.scan_project_stack(tmp_path)
+        result = scan_project_stack(tmp_path)
         assert result["has_backend"] is True
 
     def test_detects_from_package_json_react(self, tmp_path):
         (tmp_path / "package.json").write_text(
             json.dumps({"dependencies": {"react": "^18.0.0"}})
         )
-        result = st.scan_project_stack(tmp_path)
+        result = scan_project_stack(tmp_path)
         assert result["has_frontend"] is True
         assert "React" in result["technologies"]
 
@@ -48,43 +50,43 @@ class TestScanProjectStack:
         (tmp_path / "package.json").write_text(
             json.dumps({"dependencies": {"express": "^4.18.0"}})
         )
-        result = st.scan_project_stack(tmp_path)
+        result = scan_project_stack(tmp_path)
         assert result["has_backend"] is True
         assert "Express" in result["technologies"]
 
     def test_detects_from_next_config(self, tmp_path):
         (tmp_path / "next.config.js").write_text("module.exports = {}")
-        result = st.scan_project_stack(tmp_path)
+        result = scan_project_stack(tmp_path)
         assert result["has_frontend"] is True
         assert "Next.js" in result["technologies"]
 
     def test_detects_frontend_dir_hint(self, tmp_path):
         (tmp_path / "frontend").mkdir()
-        result = st.scan_project_stack(tmp_path)
+        result = scan_project_stack(tmp_path)
         assert result["has_frontend"] is True
 
     def test_detects_backend_dir_hint(self, tmp_path):
         (tmp_path / "api").mkdir()
-        result = st.scan_project_stack(tmp_path)
+        result = scan_project_stack(tmp_path)
         assert result["has_backend"] is True
 
     def test_reads_readme(self, tmp_path):
         (tmp_path / "README.md").write_text("# My App\nA cool project.")
-        result = st.scan_project_stack(tmp_path)
+        result = scan_project_stack(tmp_path)
         assert "My App" in result["description"]
 
     def test_skips_node_modules(self, tmp_path):
         nm = tmp_path / "node_modules" / "some_lib"
         nm.mkdir(parents=True)
         (nm / "index.tsx").write_text("export {}")
-        result = st.scan_project_stack(tmp_path)
+        result = scan_project_stack(tmp_path)
         # node_modules should be skipped — no frontend detected from it alone
         assert result["has_frontend"] is False
 
     def test_fullstack_detected(self, tmp_path):
         (tmp_path / "frontend").mkdir()
         (tmp_path / "backend").mkdir()
-        result = st.scan_project_stack(tmp_path)
+        result = scan_project_stack(tmp_path)
         assert result["has_frontend"] is True
         assert result["has_backend"] is True
 
@@ -102,7 +104,7 @@ class TestSubmitTaskCallClaude:
         mock.stdout = stdout
         mock.stderr = ""
         with patch("subprocess.run", return_value=mock):
-            return st._call_claude("prompt")
+            return call_claude_list("prompt")
 
     def test_plain_json_array(self):
         result = self._run('[{"project_id": "p1", "summary": "S"}]')
@@ -137,7 +139,7 @@ class TestSubmitTaskCallClaude:
         mock.stderr = "claude crashed"
         with patch("subprocess.run", return_value=mock):
             with pytest.raises(SystemExit, match="claude -p"):
-                st._call_claude("prompt")
+                call_claude_list("prompt")
 
 
 # ---------------------------------------------------------------------------
@@ -154,47 +156,47 @@ _KNOWN_TAGS = [
 
 class TestResolveTagsFunction:
     def test_uuid_passthrough(self):
-        result = st._resolve_tags(["aaa-111", "bbb-222"], _KNOWN_TAGS)
+        result = resolve_tags(["aaa-111", "bbb-222"], _KNOWN_TAGS)
         assert result == ["aaa-111", "bbb-222"]
 
     def test_name_to_uuid_exact(self):
-        result = st._resolve_tags(["Фронтенд"], _KNOWN_TAGS)
+        result = resolve_tags(["Фронтенд"], _KNOWN_TAGS)
         assert result == ["aaa-111"]
 
     def test_name_case_insensitive(self):
-        result = st._resolve_tags(["фронтенд", "БЕКЕНД"], _KNOWN_TAGS)
+        result = resolve_tags(["фронтенд", "БЕКЕНД"], _KNOWN_TAGS)
         assert result == ["aaa-111", "bbb-222"]
 
     def test_english_name_not_resolved(self):
         """English names like 'frontend' don't match Russian 'Фронтенд'."""
-        result = st._resolve_tags(["frontend"], _KNOWN_TAGS)
+        result = resolve_tags(["frontend"], _KNOWN_TAGS)
         assert result == []
 
     def test_code_to_uuid(self):
-        result = st._resolve_tags(["FE"], _KNOWN_TAGS)
+        result = resolve_tags(["FE"], _KNOWN_TAGS)
         assert result == ["aaa-111"]
 
     def test_code_case_insensitive(self):
-        result = st._resolve_tags(["be"], _KNOWN_TAGS)
+        result = resolve_tags(["be"], _KNOWN_TAGS)
         assert result == ["bbb-222"]
 
     def test_unknown_tag_skipped(self):
-        result = st._resolve_tags(["unknown-xyz"], _KNOWN_TAGS)
+        result = resolve_tags(["unknown-xyz"], _KNOWN_TAGS)
         assert result == []
 
     def test_mixed_input(self):
-        result = st._resolve_tags(["aaa-111", "Бекенд", "EP", "garbage"], _KNOWN_TAGS)
+        result = resolve_tags(["aaa-111", "Бекенд", "EP", "garbage"], _KNOWN_TAGS)
         assert result == ["aaa-111", "bbb-222", "ccc-333"]
 
     def test_empty_input(self):
-        result = st._resolve_tags([], _KNOWN_TAGS)
+        result = resolve_tags([], _KNOWN_TAGS)
         assert result == []
 
     def test_empty_known_tags(self):
-        result = st._resolve_tags(["aaa-111"], [])
+        result = resolve_tags(["aaa-111"], [])
         assert result == []
 
     def test_empty_code_ignored_for_code_lookup(self):
         """Tag with empty code should not be matched by empty string."""
-        result = st._resolve_tags([""], _KNOWN_TAGS)
+        result = resolve_tags([""], _KNOWN_TAGS)
         assert result == []

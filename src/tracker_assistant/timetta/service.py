@@ -4,7 +4,7 @@ import logging
 from pathlib import Path
 from typing import Any
 
-from .adapters.timetta_adapter import TimettaAdapter
+from .adapter import TimettaAdapter
 from .models import Task
 
 logger = logging.getLogger(__name__)

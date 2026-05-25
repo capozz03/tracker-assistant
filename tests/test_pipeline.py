@@ -6,8 +6,8 @@ from unittest.mock import MagicMock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from tracker_assistant.models import Task
-from tracker_assistant.pipeline import create_task, list_projects
+from tracker_assistant.timetta.models import Task
+from tracker_assistant.timetta.service import create_task, list_projects
 
 
 def _make_adapter(**overrides) -> MagicMock:

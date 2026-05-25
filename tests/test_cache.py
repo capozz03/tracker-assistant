@@ -10,7 +10,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from tracker_assistant.io_utils import load_cached
+from tracker_assistant.shared.io_utils import load_cached
 
 
 def _make_items() -> list[dict]:
