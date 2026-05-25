@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import urllib.error
+import urllib.parse
 import urllib.request
 from pathlib import Path
 from typing import Any
@@ -14,9 +15,13 @@ logger = logging.getLogger(__name__)
 
 class TimettaAdapter:
     BASE = "https://api.timetta.com/odata"
+    # Timetta stores tags as DirectoryEntries under a fixed system directory.
+    # Override with TIMETTA_TAGS_DIR_ID env var if your instance differs.
+    DEFAULT_TAGS_DIR_ID = "d7f2a0a2-c449-488e-9738-044cb99ff173"
 
-    def __init__(self, token: str = "") -> None:
+    def __init__(self, token: str = "", *, tags_dir_id: str = DEFAULT_TAGS_DIR_ID) -> None:
         self._token = token
+        self._tags_dir_id = tags_dir_id
 
     def _request(
         self,
@@ -24,6 +29,8 @@ class TimettaAdapter:
         path: str,
         body: dict[str, Any] | None = None,
         params: str = "",
+        *,
+        quiet: bool = False,
     ) -> Any:
         url = f"{self.BASE}{path}"
         if params:
@@ -44,7 +51,8 @@ class TimettaAdapter:
                 return result
         except urllib.error.HTTPError as exc:
             payload = exc.read().decode("utf-8", errors="replace")
-            logger.error("← %s %s status=%d body=%s", method, path, exc.code, payload)
+            log_fn = logger.debug if quiet else logger.error
+            log_fn("← %s %s status=%d body=%s", method, path, exc.code, payload)
             raise RuntimeError(f"Timetta {method} {path} → {exc.code}: {payload}") from exc
 
     def get_projects(self) -> list[dict[str, Any]]:
@@ -62,14 +70,13 @@ class TimettaAdapter:
         return items
 
     def get_tags(self) -> list[dict[str, Any]]:
-        logger.debug("Fetching tags")
-        try:
-            result = self._request("GET", "/Tags", params="$select=id,name")
-        except RuntimeError as exc:
-            if "404" in str(exc):
-                logger.warning("Tags not supported by this Timetta instance — returning empty list")
-                return []
-            raise
+        logger.debug("Fetching tags from DirectoryEntries (dir=%s)", self._tags_dir_id)
+        params = urllib.parse.urlencode({
+            "$select": "id,code,name",
+            "$filter": f"(directoryId eq {self._tags_dir_id})",
+            "$orderby": "name asc",
+        })
+        result = self._request("GET", "/DirectoryEntries", params=params)
         items: list[dict[str, Any]] = result.get("value", result) if isinstance(result, dict) else result
         logger.debug("Got %d tags", len(items))
         return items
@@ -83,18 +90,32 @@ class TimettaAdapter:
 
     def get_task(self, task_id: str) -> dict[str, Any]:
         logger.debug("Getting task %s", task_id)
-        return self._request("GET", f"/Issues('{task_id}')")
+        return self._request("GET", f"/Issues({task_id})")
+
+    def _format_tags(self, tags: list[Any]) -> list[dict[str, Any]]:
+        """Конвертировать строки-UUID в DirectorySetEntry объекты для Timetta API."""
+        result = []
+        for t in tags:
+            if isinstance(t, str):
+                result.append({"directoryEntryId": t, "directoryId": self._tags_dir_id})
+            elif isinstance(t, dict) and "directoryEntryId" not in t and "id" in t:
+                result.append({"directoryEntryId": t["id"], "directoryId": self._tags_dir_id})
+            else:
+                result.append(t)
+        return result
 
     def update_task(self, task_id: str, **fields: Any) -> dict[str, Any]:
         logger.debug("Updating task %s fields=%s", task_id, list(fields.keys()))
-        return self._request("PATCH", f"/Issues('{task_id}')", fields)
+        if "tags" in fields and fields["tags"]:
+            fields["tags"] = self._format_tags(fields["tags"])
+        return self._request("PATCH", f"/Issues({task_id})", fields)
 
     def add_comment(self, task_id: str, text: str) -> dict[str, Any] | None:
         logger.debug("Adding comment to task %s (len=%d)", task_id, len(text))
         try:
             return self._request(
                 "POST",
-                f"/Issues('{task_id}')/Comments",
+                f"/Issues({task_id})/Comments",
                 {"text": text},
             )
         except RuntimeError as exc:
@@ -106,7 +127,7 @@ class TimettaAdapter:
     def attach_file(self, task_id: str, filepath: str) -> dict[str, Any] | None:
         path = Path(filepath)
         logger.debug("Attaching file %s to task %s", path.name, task_id)
-        url = f"{self.BASE}/Issues('{task_id}')/Attachments"
+        url = f"{self.BASE}/Issues({task_id})/Attachments"
         with path.open("rb") as fh:
             content = fh.read()
         boundary = "----TimettaBoundary"

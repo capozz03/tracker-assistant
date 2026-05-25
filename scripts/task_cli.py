@@ -23,8 +23,13 @@ def _build_adapter(root: Path) -> TimettaAdapter:
     token = env.get("TIMETTA_TOKEN") or os.environ.get("TIMETTA_TOKEN", "")
     if not token:
         raise SystemExit("ERROR: set TIMETTA_TOKEN in .env")
-    logging.debug("Adapter: using TIMETTA_TOKEN")
-    return TimettaAdapter(token=token)
+    tags_dir_id = (
+        env.get("TIMETTA_TAGS_DIR_ID")
+        or os.environ.get("TIMETTA_TAGS_DIR_ID", "")
+        or TimettaAdapter.DEFAULT_TAGS_DIR_ID
+    )
+    logging.debug("Adapter: using TIMETTA_TOKEN, tags_dir_id=%s", tags_dir_id)
+    return TimettaAdapter(token=token, tags_dir_id=tags_dir_id)
 
 
 def _setup_logging(level: str) -> None:

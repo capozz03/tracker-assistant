@@ -150,7 +150,7 @@ class TestGetTask:
         with patch("urllib.request.urlopen", side_effect=fake_urlopen):
             result = _make_adapter().get_task("task-5")
 
-        assert "/Issues('task-5')" in urls[0]
+        assert "/Issues(task-5)" in urls[0]
         assert result["id"] == "task-5"
 
 
@@ -296,14 +296,46 @@ class TestGetTags:
             result = _make_adapter().get_tags()
         assert result == payload["value"]
 
-    def test_404_returns_empty_list(self):
+    def test_uses_directory_entries_endpoint(self):
+        """Tags are fetched from /DirectoryEntries with a directoryId filter."""
+        payload = {"value": []}
+        captured: list[str] = []
+
+        def side_effect(req):
+            captured.append(req.full_url)
+            return _mock_response(payload)
+
+        with patch("urllib.request.urlopen", side_effect=side_effect):
+            _make_adapter().get_tags()
+
+        assert len(captured) == 1
+        assert "/DirectoryEntries" in captured[0]
+        assert "directoryId" in captured[0]
+
+    def test_custom_tags_dir_id(self):
+        """tags_dir_id constructor param changes the filter."""
+        custom_id = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+        payload = {"value": []}
+        captured: list[str] = []
+
+        def side_effect(req):
+            captured.append(req.full_url)
+            return _mock_response(payload)
+
+        with patch("urllib.request.urlopen", side_effect=side_effect):
+            TimettaAdapter(token="tok", tags_dir_id=custom_id).get_tags()
+
+        assert custom_id in captured[0]
+
+    def test_404_raises(self):
+        """404 from /DirectoryEntries propagates — wrong directory ID or permissions."""
         err = urllib.error.HTTPError(
             url="http://x", code=404, msg="Not Found", hdrs=None,  # type: ignore[arg-type]
             fp=io.BytesIO(b'{"error":"not found"}'),
         )
         with patch("urllib.request.urlopen", side_effect=err):
-            result = _make_adapter().get_tags()
-        assert result == []
+            with pytest.raises(RuntimeError, match="404"):
+                _make_adapter().get_tags()
 
     def test_other_errors_propagate(self):
         err = urllib.error.HTTPError(
@@ -331,7 +363,7 @@ class TestAttachFile:
         with patch("urllib.request.urlopen", side_effect=fake_urlopen):
             result = _make_adapter().attach_file("task-5", str(dummy))
 
-        assert "/Issues('task-5')/Attachments" in urls[0]
+        assert "/Issues(task-5)/Attachments" in urls[0]
         assert "multipart/form-data" in content_types[0]
         assert result["id"] == "att-1"
 
@@ -346,3 +378,114 @@ class TestAttachFile:
             result = _make_adapter().attach_file("task-1", str(dummy))
 
         assert result is None
+
+
+class TestFormatTags:
+    """_format_tags converts str UUIDs / {id} dicts → DirectorySetEntry objects."""
+
+    def test_string_uuid_becomes_directory_set_entry(self):
+        adapter = _make_adapter()
+        result = adapter._format_tags(["abc-123"])
+        assert result == [{"directoryEntryId": "abc-123", "directoryId": adapter._tags_dir_id}]
+
+    def test_dict_with_id_field_converted(self):
+        adapter = _make_adapter()
+        result = adapter._format_tags([{"id": "abc-123"}])
+        assert result == [{"directoryEntryId": "abc-123", "directoryId": adapter._tags_dir_id}]
+
+    def test_already_formatted_passthrough(self):
+        adapter = _make_adapter()
+        entry = {"directoryEntryId": "abc-123", "directoryId": "dir-uuid"}
+        result = adapter._format_tags([entry])
+        assert result == [entry]
+
+    def test_uses_custom_tags_dir_id(self):
+        custom_dir = "custom-dir-uuid"
+        adapter = TimettaAdapter(token="tok", tags_dir_id=custom_dir)
+        result = adapter._format_tags(["tag-uuid"])
+        assert result[0]["directoryId"] == custom_dir
+
+    def test_empty_list_returns_empty(self):
+        assert _make_adapter()._format_tags([]) == []
+
+    def test_mixed_formats_all_converted(self):
+        adapter = _make_adapter()
+        result = adapter._format_tags(["str-uuid", {"id": "dict-uuid"}])
+        assert result[0]["directoryEntryId"] == "str-uuid"
+        assert result[1]["directoryEntryId"] == "dict-uuid"
+
+
+class TestUpdateTaskPathAndTags:
+    """update_task uses /Issues(uuid) without quotes and converts tags to DirectorySetEntry."""
+
+    def test_path_uses_uuid_without_single_quotes(self):
+        urls: list[str] = []
+
+        def fake_urlopen(req):
+            urls.append(req.full_url)
+            return _mock_response({"id": "task-5"})
+
+        with patch("urllib.request.urlopen", side_effect=fake_urlopen):
+            _make_adapter().update_task("task-5", name="X")
+
+        assert "/Issues(task-5)" in urls[0]
+        assert "/Issues('task-5')" not in urls[0]
+
+    def test_tags_converted_to_directory_set_entries(self):
+        bodies: list[dict] = []
+        adapter = _make_adapter()
+
+        def fake_urlopen(req):
+            bodies.append(json.loads(req.data))
+            return _mock_response({})
+
+        with patch("urllib.request.urlopen", side_effect=fake_urlopen):
+            adapter.update_task("task-5", tags=["frontend-uuid", "backend-uuid"])
+
+        tags = bodies[0]["tags"]
+        assert all(isinstance(t, dict) for t in tags)
+        assert all("directoryEntryId" in t and "directoryId" in t for t in tags)
+        assert tags[0]["directoryEntryId"] == "frontend-uuid"
+        assert tags[0]["directoryId"] == adapter._tags_dir_id
+        assert tags[1]["directoryEntryId"] == "backend-uuid"
+
+    def test_fields_without_tags_unchanged(self):
+        bodies: list[dict] = []
+
+        def fake_urlopen(req):
+            bodies.append(json.loads(req.data))
+            return _mock_response({})
+
+        with patch("urllib.request.urlopen", side_effect=fake_urlopen):
+            _make_adapter().update_task("task-5", name="New name")
+
+        assert "tags" not in bodies[0]
+        assert bodies[0]["name"] == "New name"
+
+
+class TestGetTagsUrlEncoding:
+    """get_tags must URL-encode $filter — raw spaces in the URL are invalid (Python 3.14+)."""
+
+    def test_url_has_no_raw_spaces(self):
+        captured: list[str] = []
+
+        def fake_urlopen(req):
+            captured.append(req.full_url)
+            return _mock_response({"value": []})
+
+        with patch("urllib.request.urlopen", side_effect=fake_urlopen):
+            _make_adapter().get_tags()
+
+        assert " " not in captured[0], f"Raw space in URL: {captured[0]}"
+
+    def test_filter_contains_directory_id(self):
+        captured: list[str] = []
+
+        def fake_urlopen(req):
+            captured.append(req.full_url)
+            return _mock_response({"value": []})
+
+        with patch("urllib.request.urlopen", side_effect=fake_urlopen):
+            _make_adapter().get_tags()
+
+        assert TimettaAdapter.DEFAULT_TAGS_DIR_ID in captured[0]

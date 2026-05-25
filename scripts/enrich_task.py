@@ -62,8 +62,13 @@ def _build_adapter(root: Path) -> TimettaAdapter:
     token = env.get("TIMETTA_TOKEN") or os.environ.get("TIMETTA_TOKEN", "")
     if not token:
         raise SystemExit("ERROR: set TIMETTA_TOKEN in .env")
-    logger.debug("_build_adapter: using TIMETTA_TOKEN")
-    return TimettaAdapter(token=token)
+    tags_dir_id = (
+        env.get("TIMETTA_TAGS_DIR_ID")
+        or os.environ.get("TIMETTA_TAGS_DIR_ID", "")
+        or TimettaAdapter.DEFAULT_TAGS_DIR_ID
+    )
+    logger.debug("_build_adapter: using TIMETTA_TOKEN, tags_dir_id=%s", tags_dir_id)
+    return TimettaAdapter(token=token, tags_dir_id=tags_dir_id)
 
 
 def _get_codebase_context(root: Path) -> str:
@@ -91,6 +96,16 @@ def _call_claude(prompt: str) -> dict[str, Any]:
         )
     output = result.stdout.strip()
     logger.debug("_call_claude: received %d chars", len(output))
+    # Strip markdown code fences that claude -p sometimes wraps around JSON output
+    if output.startswith("```"):
+        lines = output.splitlines()
+        end = len(lines)
+        for i in range(len(lines) - 1, 0, -1):
+            if lines[i].strip() == "```":
+                end = i
+                break
+        output = "\n".join(lines[1:end]).strip()
+        logger.debug("_call_claude: stripped markdown code fence")
     try:
         return json.loads(output)
     except json.JSONDecodeError as exc:

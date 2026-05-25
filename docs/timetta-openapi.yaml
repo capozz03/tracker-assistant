@@ -1,0 +1,518 @@
+openapi: 3.0.3
+info:
+  title: Timetta OData API
+  description: |
+    Timetta OData v4 REST API — задокументированные эндпоинты, форматы и нюансы.
+
+    **Base URL:** `https://api.timetta.com/odata`
+
+    **Аутентификация:** Bearer token (статический, срок действия 1 год).
+    Настраивается в Timetta → Настройки → API-токены.
+
+    **Важные нюансы:**
+    - UUID в путях БЕЗ кавычек: `/Issues(uuid)`, не `/Issues('uuid')`
+    - `typeId` обязателен при создании задачи
+    - Теги (`tags`) нельзя задать в POST — только через PATCH после создания
+    - Поле `tags` требует формат `DirectorySetEntry`, не строки-UUID
+    - Все параметры `$filter` должны быть URL-закодированы
+  version: "1.0.0"
+  contact:
+    name: tracker-assistant
+
+servers:
+  - url: https://api.timetta.com/odata
+    description: Timetta OData API
+
+security:
+  - bearerAuth: []
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      description: Bearer token из Timetta → Настройки → API-токены
+
+  schemas:
+    Project:
+      type: object
+      properties:
+        id:   { type: string, format: uuid }
+        name: { type: string, example: "Ahhu-tour" }
+        code: { type: string, example: "Ahhu" }
+
+    User:
+      type: object
+      properties:
+        id:          { type: string, format: uuid }
+        displayName: { type: string, example: "Иван Иванов" }
+
+    Tag:
+      description: DirectoryEntry — элемент директории тегов
+      type: object
+      properties:
+        id:   { type: string, format: uuid }
+        name: { type: string, example: "Фронтенд" }
+        code: { type: string, example: "FE" }
+
+    DirectorySetEntry:
+      description: |
+        Формат для записи тега в задачу (PATCH /Issues).
+        Нельзя использовать строки-UUID напрямую.
+      type: object
+      required: [directoryEntryId, directoryId]
+      properties:
+        directoryEntryId:
+          type: string
+          format: uuid
+          description: UUID тега из /DirectoryEntries
+        directoryId:
+          type: string
+          format: uuid
+          description: UUID директории тегов (по умолчанию d7f2a0a2-c449-488e-9738-044cb99ff173)
+        name:
+          type: string
+          nullable: true
+          description: Read-only, возвращается в GET
+        code:
+          type: string
+          nullable: true
+
+    Sprint:
+      type: object
+      properties:
+        id:        { type: string, format: uuid }
+        name:      { type: string, example: "Спринт-7" }
+        startDate: { type: string, format: date, example: "2026-05-25" }
+        endDate:   { type: string, format: date, example: "2026-05-31" }
+        viewId:
+          type: string
+          format: uuid
+          description: |
+            ID доски/вида проекта. Используй для фильтрации спринтов проекта,
+            так как поле projectId у Sprint отсутствует.
+        isCurrent:
+          type: boolean
+          description: |
+            Может не обновляться автоматически. Проверяй startDate/endDate
+            для точного определения активного спринта.
+        isActive:  { type: boolean }
+
+    IssueBase:
+      type: object
+      properties:
+        id:          { type: string, format: uuid }
+        name:        { type: string }
+        description: { type: string }
+        projectId:   { type: string, format: uuid }
+        typeId:
+          type: string
+          format: uuid
+          description: "Обязателен. Дефолт: 968f71c6-6b38-4845-963a-b2d07ec95185"
+        assigneeId:  { type: string, format: uuid, nullable: true }
+        sprintId:    { type: string, format: uuid, nullable: true }
+        storyPoints: { type: integer, nullable: true }
+        tags:
+          type: array
+          items: { $ref: '#/components/schemas/DirectorySetEntry' }
+          description: Заполняется через PATCH после создания
+        code:  { type: string, readOnly: true, example: "AHHU-244" }
+        key:   { type: string, readOnly: true, example: "AHHU-244" }
+        isActive: { type: boolean, readOnly: true }
+
+    IssueCreate:
+      description: |
+        Тело POST /Issues.
+        Нельзя включать tags — они вызывают 400. Устанавливай через PATCH после создания.
+      type: object
+      required: [projectId, name, typeId]
+      properties:
+        projectId:
+          type: string
+          format: uuid
+        name:
+          type: string
+          example: "Frontend: UI полнотекстового поиска"
+        description:
+          type: string
+          description: Markdown
+        typeId:
+          type: string
+          format: uuid
+          default: "968f71c6-6b38-4845-963a-b2d07ec95185"
+        assigneeId:
+          type: string
+          format: uuid
+        sprintId:
+          type: string
+          format: uuid
+        storyPoints:
+          type: integer
+
+    IssueUpdate:
+      description: |
+        Тело PATCH /Issues(uuid).
+        Коллекции (tags, directorySetValue1) требуют DirectorySetEntry объекты.
+        Передача строк-UUID возвращает 400 "NoDelta: Entity changes must be passed."
+      type: object
+      properties:
+        name:        { type: string }
+        description: { type: string }
+        assigneeId:  { type: string, format: uuid }
+        sprintId:    { type: string, format: uuid }
+        storyPoints: { type: integer }
+        tags:
+          type: array
+          items: { $ref: '#/components/schemas/DirectorySetEntry' }
+          description: |
+            Заменяет все теги. Каждый элемент — DirectorySetEntry с directoryEntryId + directoryId.
+
+    ODataList:
+      type: object
+      properties:
+        '@odata.context': { type: string }
+        value:
+          type: array
+          items: {}
+
+    ApiError:
+      type: object
+      properties:
+        error:
+          type: object
+          properties:
+            code:    { type: string }
+            message: { type: string }
+            details:
+              type: array
+              items:
+                type: object
+                properties:
+                  code:    { type: string }
+                  message: { type: string }
+                  target:  { type: string }
+
+  parameters:
+    selectParam:
+      name: $select
+      in: query
+      description: Список полей через запятую
+      schema: { type: string }
+      example: id,name,code
+
+    filterParam:
+      name: $filter
+      in: query
+      description: OData-фильтр (должен быть URL-закодирован)
+      schema: { type: string }
+
+    orderbyParam:
+      name: $orderby
+      in: query
+      schema: { type: string }
+
+    topParam:
+      name: $top
+      in: query
+      schema: { type: integer }
+
+paths:
+  /Projects:
+    get:
+      summary: Список проектов
+      operationId: listProjects
+      parameters:
+        - $ref: '#/components/parameters/selectParam'
+        - $ref: '#/components/parameters/filterParam'
+        - $ref: '#/components/parameters/topParam'
+      responses:
+        '200':
+          description: Список проектов
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ODataList'
+                  - properties:
+                      value:
+                        type: array
+                        items: { $ref: '#/components/schemas/Project' }
+              example:
+                value:
+                  - id: "6d6e852f-59c3-4a49-bd7f-3782faa82ef1"
+                    name: "Ahhu-tour"
+                    code: "Ahhu"
+        '401':
+          description: Неверный токен
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ApiError' }
+
+  /Users:
+    get:
+      summary: Список пользователей
+      operationId: listUsers
+      parameters:
+        - $ref: '#/components/parameters/selectParam'
+      responses:
+        '200':
+          description: Список пользователей
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ODataList'
+                  - properties:
+                      value:
+                        type: array
+                        items: { $ref: '#/components/schemas/User' }
+              example:
+                value:
+                  - id: "9d9604ed-03c8-459d-ba50-defc84cedab6"
+                    displayName: "Иван Иванов"
+
+  /DirectoryEntries:
+    get:
+      summary: Элементы директории (теги при фильтрации по directoryId)
+      operationId: listDirectoryEntries
+      description: |
+        Теги хранятся как DirectoryEntry под фиксированной системной директорией.
+        Дефолтный ID директории тегов: `d7f2a0a2-c449-488e-9738-044cb99ff173`
+      parameters:
+        - name: $filter
+          in: query
+          required: true
+          description: "Фильтр по директории: (directoryId eq UUID). Обязателен — иначе возвращаются все директории."
+          schema: { type: string }
+          example: "(directoryId eq d7f2a0a2-c449-488e-9738-044cb99ff173)"
+        - $ref: '#/components/parameters/selectParam'
+        - $ref: '#/components/parameters/orderbyParam'
+      responses:
+        '200':
+          description: Список тегов
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ODataList'
+                  - properties:
+                      value:
+                        type: array
+                        items: { $ref: '#/components/schemas/Tag' }
+              example:
+                value:
+                  - id: "c98cabfb-8529-4fbd-bb5d-e20b8f9d87e4"
+                    name: "Фронтенд"
+                    code: ""
+                  - id: "e9967692-f10d-4900-af3c-6c921888852e"
+                    name: "Бекенд"
+                    code: ""
+
+  /Sprints:
+    get:
+      summary: Список спринтов
+      operationId: listSprints
+      description: |
+        Спринты не имеют поля `projectId`. Для фильтрации по проекту используй `viewId`.
+        Чтобы найти `viewId` проекта: возьми любую задачу проекта с полем `sprintId`,
+        найди спринт и используй его `viewId`.
+      parameters:
+        - name: $filter
+          in: query
+          description: |
+            Примеры:
+            - `viewId eq UUID` — спринты конкретной доски/проекта
+            - `isCurrent eq true` — текущие спринты всех проектов
+          schema: { type: string }
+        - $ref: '#/components/parameters/selectParam'
+        - $ref: '#/components/parameters/orderbyParam'
+      responses:
+        '200':
+          description: Список спринтов
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ODataList'
+                  - properties:
+                      value:
+                        type: array
+                        items: { $ref: '#/components/schemas/Sprint' }
+              example:
+                value:
+                  - id: "941a82f6-7f26-4ecb-af63-2f2f5ba02b91"
+                    name: "Спринт-7"
+                    startDate: "2026-05-25"
+                    endDate: "2026-05-31"
+                    viewId: "61f00507-61fc-4e2c-b67c-8faf6e3db349"
+                    isCurrent: false
+                    isActive: true
+
+  /Issues:
+    post:
+      summary: Создать задачу
+      operationId: createIssue
+      description: |
+        **Обязательные поля:** `projectId`, `name`, `typeId`.
+
+        **Нельзя включать `tags`** — вызывает 400 «Entity cannot be null».
+        Устанавливай теги отдельным PATCH после создания.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/IssueCreate' }
+            examples:
+              minimal:
+                summary: Минимальный запрос
+                value:
+                  projectId: "6d6e852f-59c3-4a49-bd7f-3782faa82ef1"
+                  name: "Frontend: UI поиска"
+                  typeId: "968f71c6-6b38-4845-963a-b2d07ec95185"
+              withSprint:
+                summary: С спринтом
+                value:
+                  projectId: "6d6e852f-59c3-4a49-bd7f-3782faa82ef1"
+                  name: "Backend: API поиска"
+                  typeId: "968f71c6-6b38-4845-963a-b2d07ec95185"
+                  sprintId: "941a82f6-7f26-4ecb-af63-2f2f5ba02b91"
+                  description: "## Описание\n\nРеализовать полнотекстовый поиск."
+      responses:
+        '201':
+          description: Задача создана
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/IssueBase' }
+        '400':
+          description: |
+            Ошибка валидации. Частые причины:
+            - Отсутствует `typeId` → «Entity cannot be null»
+            - Включены `tags` в теле → «Entity cannot be null»
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ApiError' }
+
+  '/Issues({issueId})':
+    parameters:
+      - name: issueId
+        in: path
+        required: true
+        description: UUID задачи БЕЗ кавычек. `/Issues(uuid)` — не `/Issues('uuid')`
+        schema: { type: string, format: uuid }
+
+    get:
+      summary: Получить задачу по ID
+      operationId: getIssue
+      parameters:
+        - $ref: '#/components/parameters/selectParam'
+      responses:
+        '200':
+          description: Задача
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/IssueBase' }
+        '404':
+          description: Задача не найдена или неверный формат пути (кавычки вокруг UUID)
+
+    patch:
+      summary: Обновить поля задачи
+      operationId: updateIssue
+      description: |
+        **Коллекции (tags):** требуют формат `DirectorySetEntry`.
+        Строки-UUID вызывают 400 «NoDelta: Entity changes must be passed».
+
+        Скалярные поля (name, description, assigneeId, sprintId, storyPoints)
+        обновляются без ограничений.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/IssueUpdate' }
+            examples:
+              setTags:
+                summary: Установить теги
+                value:
+                  tags:
+                    - directoryEntryId: "c98cabfb-8529-4fbd-bb5d-e20b8f9d87e4"
+                      directoryId: "d7f2a0a2-c449-488e-9738-044cb99ff173"
+              setAssignee:
+                summary: Назначить исполнителя
+                value:
+                  assigneeId: "9d9604ed-03c8-459d-ba50-defc84cedab6"
+              setSprintAndStoryPoints:
+                summary: Спринт и story points
+                value:
+                  sprintId: "941a82f6-7f26-4ecb-af63-2f2f5ba02b91"
+                  storyPoints: 5
+      responses:
+        '200':
+          description: Обновлено
+        '400':
+          description: |
+            NoDelta — теги переданы в неверном формате (строки вместо DirectorySetEntry)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ApiError' }
+        '404':
+          description: Задача не найдена (проверь формат пути — UUID без кавычек)
+
+  '/Issues({issueId})/Comments':
+    parameters:
+      - name: issueId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+
+    post:
+      summary: Добавить комментарий
+      operationId: addComment
+      description: Некоторые типы задач не поддерживают этот эндпоинт — возвращает 404.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [text]
+              properties:
+                text: { type: string, example: "Готово к ревью" }
+      responses:
+        '200':
+          description: Комментарий добавлен
+        '404':
+          description: Эндпоинт не поддерживается для этого типа задачи
+
+  '/Issues({issueId})/Attachments':
+    parameters:
+      - name: issueId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+
+    post:
+      summary: Прикрепить файл
+      operationId: attachFile
+      description: Multipart/form-data. Некоторые типы задач не поддерживают — возвращает 404.
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file]
+              properties:
+                file:
+                  type: string
+                  format: binary
+                  description: Файл для прикрепления
+      responses:
+        '200':
+          description: Файл прикреплён
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id: { type: string, format: uuid }
+        '404':
+          description: Эндпоинт не поддерживается для этого типа задачи

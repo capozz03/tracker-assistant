@@ -1,8 +1,8 @@
 # Tracker Assistant
 
-> Минималистичный Python-клиент для Timetta: получить проекты, создать задачу.
+> Python-клиент для Timetta: управление задачами и автоматическое создание из требований.
 
-Тонкая обёртка над Timetta OData v4 API. Без черновиков, без шаблонов, без промежуточных шагов — задача создаётся напрямую.
+Тонкая обёртка над Timetta OData v4 API. Создаёт задачи вручную через CLI или автоматически — из текста требований через `submit_task.py`.
 
 ## Быстрый старт
 
@@ -18,14 +18,21 @@ uv run python scripts/task_cli.py list-projects
 
 # Создать задачу из JSON-файла
 uv run python scripts/task_cli.py create --input task.json
+
+# Автоматически создать задачи из файла требований
+uv run python scripts/submit_task.py \
+  --requirements-file tasks.md \
+  --project-id <uuid> \
+  --sprint-id <uuid>
 ```
 
 ## Возможности
 
-- **Список проектов** — получить все проекты из Timetta API
-- **Создание задачи** — с названием, описанием, тегами, исполнителем
-- **Комментарии** — добавить комментарии сразу после создания задачи
-- **Вложения** — прикрепить файлы к задаче
+- **Submit pipeline** — текст требований → анализ стека → разбивка на задачи → создание в Timetta
+- **Создание задачи** — с названием, описанием, тегами, исполнителем, спринтом
+- **Обогащение задачи** — `enrich-task` форматирует сырое описание через `claude -p`
+- **Комментарии и вложения** — добавить к задаче сразу после создания
+- **Список пользователей и тегов** — `list-users`, `list-tags` с кешированием на 24 ч
 - **Verbose-логирование** — все HTTP-запросы в DEBUG-режиме
 
 ## Пример: task.json
@@ -41,21 +48,42 @@ uv run python scripts/task_cli.py create --input task.json
 }
 ```
 
-## CLI-команды
+## task_cli.py — команды
 
 | Команда | Описание |
 |---|---|
 | `list-projects` | Список проектов |
+| `list-users` | Список пользователей (кеш 24 ч) |
+| `list-tags` | Список тегов (кеш 24 ч) |
 | `create --input task.json` | Создать задачу из JSON-файла |
-| `add-comment --issue ID --text "..."` | Добавить комментарий к задаче |
-| `attach-file --issue ID --file path` | Прикрепить файл к задаче |
+| `update --issue ID --field value` | Обновить поля задачи |
+| `add-comment --issue ID --text "..."` | Добавить комментарий |
+| `attach-file --issue ID --file path` | Прикрепить файл |
 
 ```bash
-uv run python scripts/task_cli.py --log-level DEBUG list-projects
+uv run python scripts/task_cli.py list-users
+uv run python scripts/task_cli.py list-tags
 uv run python scripts/task_cli.py create --input task.json --root .
 uv run python scripts/task_cli.py add-comment --issue task-uuid --text "готово"
-uv run python scripts/task_cli.py attach-file --issue task-uuid --file ./spec.pdf
 ```
+
+## submit_task.py — конвейер из требований
+
+```bash
+# Из файла требований с привязкой к спринту
+uv run python scripts/submit_task.py \
+  --requirements-file tasks.md \
+  --project-id <uuid> \
+  --sprint-id <uuid>
+
+# Из текста с анализом кодовой базы
+uv run python scripts/submit_task.py \
+  --requirements "Добавить мультиселект регионов в фильтры" \
+  --project-id <uuid> \
+  --project-path /path/to/your/project
+```
+
+Конвейер: анализ стека (`has_frontend`, `has_backend`) → `claude -p` делит задачу по слоям → создаёт задачи с тегами и исполнителем.
 
 ## Использование как библиотека
 
@@ -63,20 +91,16 @@ uv run python scripts/task_cli.py attach-file --issue task-uuid --file ./spec.pd
 from tracker_assistant import Task, TimettaAdapter, list_projects, create_task
 
 adapter = TimettaAdapter(token="your_bearer_token")
-
-# Список проектов
 projects = list_projects(adapter)
 
-# Создание задачи
 task = Task(
     project_id="your-project-uuid",
     summary="Новая задача",
     tags=["backend"],
     assignee="user-uuid",
-    comments=["Первый комментарий"],
 )
 result = create_task(adapter, task)
-print(result["id"])  # "task-uuid-42"
+print(result["id"])
 ```
 
 ---
@@ -85,8 +109,11 @@ print(result["id"])  # "task-uuid-42"
 
 | Раздел | Описание |
 |---|---|
-| [Начало работы](docs/getting-started.md) | Установка, настройка .env, первый запуск |
-| [API-справочник](docs/api-reference.md) | Task, адаптер, формат task.json |
+| [Начало работы](docs/getting-started.md) | Установка, .env, первый запуск |
+| [Submit Pipeline](docs/submit-pipeline.md) | Автосоздание задач из требований |
+| [API-справочник](docs/api-reference.md) | Task, TimettaAdapter, CLI-команды |
+| [Timetta API: нюансы](docs/timetta-quirks.md) | Подводные камни OData v4 интеграции |
+| [OpenAPI Spec](docs/timetta-openapi.yaml) | Swagger-спецификация для новых интеграций |
 
 ## Изоляция в workspace
 

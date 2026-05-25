@@ -1,4 +1,4 @@
-[Back to README](../README.md) · [API-справочник →](api-reference.md)
+[Back to README](../README.md) · [Submit Pipeline →](submit-pipeline.md)
 
 # Начало работы
 
@@ -6,7 +6,7 @@
 
 - Python 3.10+
 - [uv](https://docs.astral.sh/uv/) — менеджер пакетов и окружений
-- Bearer-токен Timetta (OAuth 2.0)
+- Bearer-токен Timetta
 
 ## Установка
 
@@ -26,13 +26,21 @@ uv sync
 
 ```env
 TIMETTA_TOKEN=your_bearer_token
+TIMETTA_PROJECT_ID=your_project_uuid
 ```
 
 | Переменная | Обязательна | Описание |
 |---|---|---|
-| `TIMETTA_TOKEN` | да | Bearer-токен Timetta (OAuth 2.0) |
+| `TIMETTA_TOKEN` | да | Bearer-токен Timetta |
+| `TIMETTA_PROJECT_ID` | нет | UUID проекта по умолчанию (для `submit_task.py`) |
+| `TIMETTA_TAGS_DIR_ID` | нет | ID директории тегов (дефолт работает для стандартных инстансов) |
 
-**Где взять токен:** Timetta → настройки аккаунта → API → создать токен доступа.
+**Где взять токен:** Timetta → Настройки аккаунта → API → создать токен доступа.
+
+**Где взять project-id:**
+```bash
+uv run python scripts/task_cli.py list-projects
+```
 
 ## Первый запуск
 
@@ -58,14 +66,16 @@ uv run python scripts/task_cli.py list-projects
 ```json
 {
   "project_id": "your-project-uuid",
+  "task_type": "968f71c6-6b38-4845-963a-b2d07ec95185",
   "summary": "Добавить API для подтверждения заказа",
   "description": "## Контекст\n\nПокупатель подтверждает заказ.",
-  "tags": ["backend", "api"],
   "assignee": "user-uuid",
   "comments": ["Обсудить на стендапе"],
   "attachments": []
 }
 ```
+
+> **Важно:** `task_type` обязателен для Timetta. Дефолтное значение: `968f71c6-6b38-4845-963a-b2d07ec95185`.
 
 ### 2. Создайте задачу
 
@@ -73,22 +83,45 @@ uv run python scripts/task_cli.py list-projects
 uv run python scripts/task_cli.py create --input task.json
 ```
 
-Вывод — полный JSON ответа от API, включая id созданной задачи:
+Вывод — полный JSON ответа от API, включая id созданной задачи.
 
-```json
-{ "id": "task-uuid-42", "name": "Добавить API для подтверждения заказа", ... }
-```
+## Авто-создание задач из требований (submit_task.py)
 
-## Добавление комментария
+Полный конвейер: текст → анализ стека → Claude → создание задач с тегами и спринтом.
 
 ```bash
-uv run python scripts/task_cli.py add-comment --issue task-uuid-42 --text "Реализовано, готово к ревью"
+# Из файла требований
+uv run python scripts/submit_task.py \
+  --requirements-file tasks.md \
+  --project-id <uuid> \
+  --sprint-id <sprint-uuid>
+
+# Текст напрямую + анализ кодовой базы
+uv run python scripts/submit_task.py \
+  --requirements "Добавить мультиселект регионов" \
+  --project-path /path/to/your/project
 ```
 
-## Прикрепление файла
+Claude автоматически разбивает задачи на Frontend/Backend и проставляет теги. Подробнее → [Submit Pipeline](submit-pipeline.md).
+
+## Обновление задачи (теги, исполнитель)
 
 ```bash
-uv run python scripts/task_cli.py attach-file --issue task-uuid-42 --file ./docs/spec.pdf
+# Назначить исполнителя
+uv run python scripts/task_cli.py update --issue <task-id> --assignee <user-uuid>
+
+# Установить теги
+uv run python scripts/task_cli.py update --issue <task-id> --set-tags <tag-uuid1>,<tag-uuid2>
+
+# Добавить один тег (сохраняет существующие)
+uv run python scripts/task_cli.py update --issue <task-id> --add-tag <tag-uuid>
+```
+
+## Добавление комментария и файла
+
+```bash
+uv run python scripts/task_cli.py add-comment --issue task-uuid --text "Реализовано, готово к ревью"
+uv run python scripts/task_cli.py attach-file --issue task-uuid --file ./docs/spec.pdf
 ```
 
 ## Отладочный режим
@@ -99,12 +132,14 @@ uv run python scripts/task_cli.py --log-level DEBUG list-projects
 
 В DEBUG-режиме все HTTP-запросы к API логируются: метод, путь, тело запроса, статус ответа.
 
-## Передача --root
-
-По умолчанию `.env` ищется в текущей директории. Если запускаете CLI из другого места:
+## Список пользователей и тегов
 
 ```bash
-uv run python /path/to/scripts/task_cli.py --root /path/to/tracker-assistant list-projects
+uv run python scripts/task_cli.py list-users
+uv run python scripts/task_cli.py list-tags
+
+# Сбросить кеш (TTL 24 ч)
+uv run python scripts/task_cli.py list-tags --no-cache
 ```
 
 ## Запуск тестов
@@ -115,5 +150,6 @@ uv run pytest tests/ -v
 
 ## See Also
 
-- [API-справочник](api-reference.md) — Task dataclass, методы адаптера, формат task.json
-- [README](../README.md) — обзор проекта
+- [Submit Pipeline](submit-pipeline.md) — авто-создание задач из требований
+- [API-справочник](api-reference.md) — Task dataclass, методы адаптера, форматы
+- [Timetta API: нюансы](timetta-quirks.md) — подводные камни и нюансы интеграции

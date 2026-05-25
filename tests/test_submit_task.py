@@ -1,0 +1,140 @@
+"""Tests for scripts/submit_task.py — stack scanner and _call_claude."""
+from __future__ import annotations
+
+import json
+import sys
+from pathlib import Path
+from unittest.mock import MagicMock, patch
+
+import pytest
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
+sys.path.insert(0, str(ROOT / "src"))
+
+import scripts.submit_task as st
+
+
+# ---------------------------------------------------------------------------
+# scan_project_stack
+# ---------------------------------------------------------------------------
+
+class TestScanProjectStack:
+    def test_nonexistent_path_returns_empty(self, tmp_path):
+        result = st.scan_project_stack(tmp_path / "does_not_exist")
+        assert result["has_frontend"] is False
+        assert result["has_backend"] is False
+        assert result["technologies"] == []
+
+    def test_detects_frontend_from_tsx_files(self, tmp_path):
+        (tmp_path / "App.tsx").write_text("export default function App() {}")
+        result = st.scan_project_stack(tmp_path)
+        assert result["has_frontend"] is True
+
+    def test_detects_backend_from_py_files(self, tmp_path):
+        (tmp_path / "main.py").write_text("print('hello')")
+        result = st.scan_project_stack(tmp_path)
+        assert result["has_backend"] is True
+
+    def test_detects_from_package_json_react(self, tmp_path):
+        (tmp_path / "package.json").write_text(
+            json.dumps({"dependencies": {"react": "^18.0.0"}})
+        )
+        result = st.scan_project_stack(tmp_path)
+        assert result["has_frontend"] is True
+        assert "React" in result["technologies"]
+
+    def test_detects_from_package_json_express(self, tmp_path):
+        (tmp_path / "package.json").write_text(
+            json.dumps({"dependencies": {"express": "^4.18.0"}})
+        )
+        result = st.scan_project_stack(tmp_path)
+        assert result["has_backend"] is True
+        assert "Express" in result["technologies"]
+
+    def test_detects_from_next_config(self, tmp_path):
+        (tmp_path / "next.config.js").write_text("module.exports = {}")
+        result = st.scan_project_stack(tmp_path)
+        assert result["has_frontend"] is True
+        assert "Next.js" in result["technologies"]
+
+    def test_detects_frontend_dir_hint(self, tmp_path):
+        (tmp_path / "frontend").mkdir()
+        result = st.scan_project_stack(tmp_path)
+        assert result["has_frontend"] is True
+
+    def test_detects_backend_dir_hint(self, tmp_path):
+        (tmp_path / "api").mkdir()
+        result = st.scan_project_stack(tmp_path)
+        assert result["has_backend"] is True
+
+    def test_reads_readme(self, tmp_path):
+        (tmp_path / "README.md").write_text("# My App\nA cool project.")
+        result = st.scan_project_stack(tmp_path)
+        assert "My App" in result["description"]
+
+    def test_skips_node_modules(self, tmp_path):
+        nm = tmp_path / "node_modules" / "some_lib"
+        nm.mkdir(parents=True)
+        (nm / "index.tsx").write_text("export {}")
+        result = st.scan_project_stack(tmp_path)
+        # node_modules should be skipped — no frontend detected from it alone
+        assert result["has_frontend"] is False
+
+    def test_fullstack_detected(self, tmp_path):
+        (tmp_path / "frontend").mkdir()
+        (tmp_path / "backend").mkdir()
+        result = st.scan_project_stack(tmp_path)
+        assert result["has_frontend"] is True
+        assert result["has_backend"] is True
+
+
+# ---------------------------------------------------------------------------
+# _call_claude (submit_task version — returns list)
+# ---------------------------------------------------------------------------
+
+class TestSubmitTaskCallClaude:
+    """submit_task._call_claude must return a list and handle text preambles."""
+
+    def _run(self, stdout: str) -> list:
+        mock = MagicMock()
+        mock.returncode = 0
+        mock.stdout = stdout
+        mock.stderr = ""
+        with patch("subprocess.run", return_value=mock):
+            return st._call_claude("prompt")
+
+    def test_plain_json_array(self):
+        result = self._run('[{"project_id": "p1", "summary": "S"}]')
+        assert isinstance(result, list)
+        assert result[0]["summary"] == "S"
+
+    def test_json_in_code_fence(self):
+        payload = '[{"project_id": "p1", "summary": "fenced"}]'
+        result = self._run(f"```json\n{payload}\n```")
+        assert result[0]["summary"] == "fenced"
+
+    def test_json_with_text_preamble(self):
+        """Claude sometimes writes text before the JSON array."""
+        payload = '[{"project_id": "p1", "summary": "after preamble"}]'
+        result = self._run(f"Вот задачи:\n\n```json\n{payload}\n```")
+        assert result[0]["summary"] == "after preamble"
+
+    def test_single_dict_wrapped_in_list(self):
+        """If Claude returns an object instead of array, wrap it."""
+        result = self._run('{"project_id": "p1", "summary": "single"}')
+        assert isinstance(result, list)
+        assert len(result) == 1
+
+    def test_raises_on_invalid_json(self):
+        with pytest.raises(SystemExit, match="невалидный JSON"):
+            self._run("not json at all")
+
+    def test_raises_on_nonzero_exit(self):
+        mock = MagicMock()
+        mock.returncode = 1
+        mock.stdout = ""
+        mock.stderr = "claude crashed"
+        with patch("subprocess.run", return_value=mock):
+            with pytest.raises(SystemExit, match="claude -p"):
+                st._call_claude("prompt")

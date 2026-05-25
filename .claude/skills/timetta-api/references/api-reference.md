@@ -25,7 +25,7 @@ Content-Type: application/json
 | Добавить комментарий | POST | `/WorkItems('{id}')/Comments` |
 | Прикрепить файл | POST | `/WorkItems('{id}')/Attachments` |
 | Пользователи | GET | `/Users` |
-| Теги | GET | `/Tags` |
+| Теги | GET | `/DirectoryEntries?$filter=(directoryId eq d7f2a0a2-c449-488e-9738-044cb99ff173)` |
 
 ## Создание задачи (POST /WorkItems)
 
