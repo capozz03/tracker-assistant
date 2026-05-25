@@ -29,11 +29,13 @@
 
 ## Архитектурные заметки
 
-Трёхслойная архитектура без зависимостей от внешних библиотек:
+Structured Modules — три независимых модуля (timetta, submit, enrich) с общим shared-слоем:
 
-1. **CLI-слой** (`scripts/task_cli.py`, `scripts/enrich_task.py`) — парсинг аргументов, форматирование вывода
-2. **Pipeline-слой** (`src/tracker_assistant/pipeline.py`) — оркестрация бизнес-логики
-3. **Adapter-слой** (`src/tracker_assistant/adapters/timetta_adapter.py`) — HTTP-взаимодействие с Timetta API
+- **timetta/** — управление задачами: Task, TimettaAdapter, list_projects, create_task
+- **submit/** — пайплайн из требований: stack_detector, prompt, submit_requirements
+- **enrich/** — обогащение задачи через LLM
+- **shared/** — io_utils, claude_client (используется несколькими модулями)
+- **scripts/** — тонкие CLI-обёртки (~50 строк), вызывают публичный API модулей
 
 ## Нефункциональные требования
 
@@ -46,4 +48,4 @@
 ## Архитектура
 
 Детальные архитектурные решения и правила зависимостей описаны в [`.ai-factory/ARCHITECTURE.md`](.ai-factory/ARCHITECTURE.md).  
-Паттерн: Layered Architecture (Presentation → Application → Infrastructure/Domain).
+Паттерн: Structured Modules (Technical Layers).

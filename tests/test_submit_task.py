@@ -138,3 +138,63 @@ class TestSubmitTaskCallClaude:
         with patch("subprocess.run", return_value=mock):
             with pytest.raises(SystemExit, match="claude -p"):
                 st._call_claude("prompt")
+
+
+# ---------------------------------------------------------------------------
+# _resolve_tags
+# ---------------------------------------------------------------------------
+
+_KNOWN_TAGS = [
+    {"id": "aaa-111", "name": "Фронтенд", "code": "FE"},
+    {"id": "bbb-222", "name": "Бекенд",   "code": "BE"},
+    {"id": "ccc-333", "name": "Эпик",     "code": "EP"},
+    {"id": "ddd-444", "name": "Правки",   "code": ""},
+]
+
+
+class TestResolveTagsFunction:
+    def test_uuid_passthrough(self):
+        result = st._resolve_tags(["aaa-111", "bbb-222"], _KNOWN_TAGS)
+        assert result == ["aaa-111", "bbb-222"]
+
+    def test_name_to_uuid_exact(self):
+        result = st._resolve_tags(["Фронтенд"], _KNOWN_TAGS)
+        assert result == ["aaa-111"]
+
+    def test_name_case_insensitive(self):
+        result = st._resolve_tags(["фронтенд", "БЕКЕНД"], _KNOWN_TAGS)
+        assert result == ["aaa-111", "bbb-222"]
+
+    def test_english_name_not_resolved(self):
+        """English names like 'frontend' don't match Russian 'Фронтенд'."""
+        result = st._resolve_tags(["frontend"], _KNOWN_TAGS)
+        assert result == []
+
+    def test_code_to_uuid(self):
+        result = st._resolve_tags(["FE"], _KNOWN_TAGS)
+        assert result == ["aaa-111"]
+
+    def test_code_case_insensitive(self):
+        result = st._resolve_tags(["be"], _KNOWN_TAGS)
+        assert result == ["bbb-222"]
+
+    def test_unknown_tag_skipped(self):
+        result = st._resolve_tags(["unknown-xyz"], _KNOWN_TAGS)
+        assert result == []
+
+    def test_mixed_input(self):
+        result = st._resolve_tags(["aaa-111", "Бекенд", "EP", "garbage"], _KNOWN_TAGS)
+        assert result == ["aaa-111", "bbb-222", "ccc-333"]
+
+    def test_empty_input(self):
+        result = st._resolve_tags([], _KNOWN_TAGS)
+        assert result == []
+
+    def test_empty_known_tags(self):
+        result = st._resolve_tags(["aaa-111"], [])
+        assert result == []
+
+    def test_empty_code_ignored_for_code_lookup(self):
+        """Tag with empty code should not be matched by empty string."""
+        result = st._resolve_tags([""], _KNOWN_TAGS)
+        assert result == []

@@ -210,13 +210,13 @@ _PROMPT_TEMPLATE = """\
 
 **Разбивка по слоям:**
 - Если задача затрагивает И фронтенд, И бэкенд — создай ДВЕ задачи:
-  "Frontend: <суть>" с тегом фронтенда и "Backend: <суть>" с тегом бэкенда.
+  одну с тегом «Фронтенд» и одну с тегом «Бекенд».
 - Если задача только одного слоя — одна задача.
 - Если задача организационная (аналитика, документация) — одна задача.
 
 **Каждая задача содержит:**
-- `summary`: "[Слой]: <суть>" — например "Frontend: UI полнотекстового поиска"
-- `description`: Markdown — контекст, что конкретно сделать, критерии приёмки
+- `summary`: краткое название задачи. НЕ добавляй префикс «Frontend:», «Backend:», «Фронтенд:» и т.п. — слой уже указан в тегах.
+- `description`: Markdown-описание. Заголовки разделов оформляй ТОЛЬКО так: `#### ***Название раздела***` (h4 + жирный курсив). Структура: контекст, что сделать, критерии приёмки.
 - `tags`: массив из 1-2 UUID из списка выше (слой + тематический при наличии)
 - `assignee`: UUID исполнителя если имя явно подходит, иначе ""
 - `project_id`: "{project_id}" — не менять
@@ -280,6 +280,48 @@ def _call_claude(prompt: str) -> list[dict[str, Any]]:
         raise SystemExit(f"ERROR: ожидался JSON-массив, получено {type(parsed).__name__}")
 
     return parsed
+
+
+def _resolve_tags(
+    tag_values: list[str],
+    known_tags: list[dict[str, Any]],
+) -> list[str]:
+    """Разрешает имена или UUID тегов в валидные UUID из known_tags.
+
+    Claude иногда возвращает имена тегов ("Фронтенд", "backend") вместо UUID.
+    Эта функция принимает любой формат и возвращает только корректные UUID.
+    """
+    # Построить справочники: id (passthrough), name→id, code→id (всё нижний регистр)
+    id_set: set[str] = {t.get("id", "") for t in known_tags if t.get("id")}
+    name_to_id: dict[str, str] = {
+        t.get("name", "").lower(): t.get("id", "")
+        for t in known_tags
+        if t.get("name") and t.get("id")
+    }
+    code_to_id: dict[str, str] = {
+        t.get("code", "").lower(): t.get("id", "")
+        for t in known_tags
+        if t.get("code") and t.get("id")
+    }
+
+    result: list[str] = []
+    for val in tag_values:
+        val_str = str(val).strip()
+        if val_str in id_set:
+            # Уже валидный UUID
+            logger.debug("[FIX-TAG] ✓ UUID passthrough: %s", val_str)
+            result.append(val_str)
+        elif val_str.lower() in name_to_id:
+            resolved = name_to_id[val_str.lower()]
+            logger.info("[FIX-TAG] Имя → UUID: %r → %s", val_str, resolved)
+            result.append(resolved)
+        elif val_str.lower() in code_to_id:
+            resolved = code_to_id[val_str.lower()]
+            logger.info("[FIX-TAG] Код → UUID: %r → %s", val_str, resolved)
+            result.append(resolved)
+        else:
+            logger.warning("[FIX-TAG] Тег не найден в справочнике, пропускается: %r", val_str)
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -354,7 +396,11 @@ def submit_requirements(
             task_dict.setdefault("extra", {})["sprintId"] = sprint_id
 
         # Tags идут отдельным PATCH после создания — POST /Issues не принимает строки-UUID
-        pending_tags = task_dict.pop("tags", [])
+        raw_tags = task_dict.pop("tags", [])
+        # Разрешаем имена/коды тегов в UUID (Claude иногда возвращает имена вместо UUID)
+        pending_tags = _resolve_tags(raw_tags, tags)
+        if raw_tags and not pending_tags:
+            logger.warning("[FIX-TAG] Ни один тег не разрешён из %r", raw_tags)
         pending_assignee = task_dict.get("assignee", "")
 
         task = Task.from_dict(task_dict)

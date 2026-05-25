@@ -80,7 +80,7 @@ tracker-assistant/
 |---|---|
 | [AGENTS.md](AGENTS.md) | Этот файл — карта проекта для агентов |
 | [.ai-factory/DESCRIPTION.md](.ai-factory/DESCRIPTION.md) | Детальная спецификация проекта и стека |
-| [.ai-factory/ARCHITECTURE.md](.ai-factory/ARCHITECTURE.md) | Архитектурные решения, правила зависимостей, паттерны Layered Architecture |
+| [.ai-factory/ARCHITECTURE.md](.ai-factory/ARCHITECTURE.md) | Архитектурные решения, правила зависимостей, паттерн Structured Modules |
 | [.ai-factory/rules/base.md](.ai-factory/rules/base.md) | Базовые конвенции кодовой базы |
 | [CLAUDE.md](CLAUDE.md) | Инструкции для агента: зона ответственности, запреты |
 
