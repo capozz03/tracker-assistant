@@ -10,6 +10,7 @@ from tracker_assistant.timetta.adapter import TimettaAdapter
 from tracker_assistant.timetta.models import Task
 from tracker_assistant.timetta.service import create_task, list_projects
 from tracker_assistant.shared.io_utils import load_cached, load_env
+from tracker_assistant.shared.logging import configure_logging
 
 
 def _build_adapter(root: Path) -> TimettaAdapter:
@@ -24,15 +25,6 @@ def _build_adapter(root: Path) -> TimettaAdapter:
     )
     logging.debug("Adapter: using TIMETTA_TOKEN, tags_dir_id=%s", tags_dir_id)
     return TimettaAdapter(token=token, tags_dir_id=tags_dir_id)
-
-
-def _setup_logging(level: str) -> None:
-    numeric = getattr(logging, level.upper(), logging.INFO)
-    logging.basicConfig(
-        level=numeric,
-        format="%(asctime)s %(levelname)s %(name)s %(message)s",
-        datefmt="%H:%M:%S",
-    )
 
 
 def cmd_list_projects(args: argparse.Namespace) -> int:
@@ -131,7 +123,7 @@ def cmd_attach_file(args: argparse.Namespace) -> int:
 def main() -> int:
     parser = argparse.ArgumentParser(description="Timetta CLI")
     parser.add_argument("--root", default=".", help="Path to tracker-assistant root (contains .env)")
-    parser.add_argument("--log-level", default="INFO", choices=["DEBUG", "INFO", "WARNING", "ERROR"])
+    parser.add_argument("--log-level", default=None, choices=["DEBUG", "INFO", "WARNING", "ERROR"])
     sub = parser.add_subparsers(dest="command", required=True)
 
     sub.add_parser("list-projects", help="List all Timetta projects")
@@ -160,7 +152,7 @@ def main() -> int:
     attach_p.add_argument("--file", required=True, help="Path to file")
 
     args = parser.parse_args()
-    _setup_logging(args.log_level)
+    configure_logging(args.log_level)
 
     commands = {
         "list-projects": cmd_list_projects,

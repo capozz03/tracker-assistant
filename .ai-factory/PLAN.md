@@ -34,7 +34,7 @@
   - Файл: `src/tracker_assistant/shared/logging.py`
 
 <!-- parallel: tasks 3, 5 -->
-- [ ] 3. **Обновить все CLI** — использовать `configure_logging` вместо дублирующегося `basicConfig`
+- [x] 3. **Обновить все CLI** — использовать `configure_logging` вместо дублирующегося `basicConfig`
   - `timetta/cli.py`: убрать `_setup_logging()`, заменить вызов на `configure_logging(args.log_level)`
   - `submit/cli.py`: убрать inline `logging.basicConfig(...)`, вызвать `configure_logging(args.log_level)`
   - `enrich/cli.py`: то же самое
@@ -49,7 +49,7 @@
   ```
   - Файл: `.env.example`
 
-- [ ] 5. **Тесты** — `tests/test_logging.py`
+- [x] 5. **Тесты** — `tests/test_logging.py`
   - `test_cli_level_overrides_env` — передан `cli_level="INFO"`, `LOG_LEVEL=DEBUG` → уровень INFO
   - `test_env_level_used_when_no_cli` — `cli_level=None`, `LOG_LEVEL=DEBUG` → уровень DEBUG
   - `test_default_warning_when_nothing_set` — `cli_level=None`, нет `LOG_LEVEL` в env → уровень WARNING

@@ -20,6 +20,7 @@ from pathlib import Path
 
 from tracker_assistant.submit import submit_requirements, build_adapter
 from tracker_assistant.shared.io_utils import load_cached, load_env
+from tracker_assistant.shared.logging import configure_logging
 
 logger = logging.getLogger(__name__)
 
@@ -44,15 +45,10 @@ def main() -> int:
                         help="UUID спринта в Timetta (необязательно)")
     parser.add_argument("--no-cache", action="store_true",
                         help="Игнорировать кеш пользователей/тегов")
-    parser.add_argument("--log-level", default="INFO",
+    parser.add_argument("--log-level", default=None,
                         choices=["DEBUG", "INFO", "WARNING", "ERROR"])
     args = parser.parse_args()
-
-    logging.basicConfig(
-        level=getattr(logging, args.log_level.upper(), logging.INFO),
-        format="%(asctime)s %(levelname)s %(name)s %(message)s",
-        datefmt="%H:%M:%S",
-    )
+    configure_logging(args.log_level)
 
     root = Path(args.root).resolve()
 

@@ -16,6 +16,7 @@ from pathlib import Path
 
 from .config import load_config
 from .bot import run_bot
+from tracker_assistant.shared.logging import configure_logging
 
 logger = logging.getLogger(__name__)
 
@@ -32,9 +33,9 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument(
         "--log-level",
-        default="INFO",
+        default=None,
         choices=["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"],
-        help="Logging level (default: INFO).",
+        help="Logging level (default: WARNING).",
     )
     parser.add_argument(
         "--dry-run",
@@ -54,11 +55,7 @@ def main(argv: list[str] | None = None) -> int:
         Exit code (0 = success, non-zero = error).
     """
     args = _parse_args(argv)
-
-    logging.basicConfig(
-        level=getattr(logging, args.log_level),
-        format="%(asctime)s %(levelname)s %(name)s %(message)s",
-    )
+    configure_logging(args.log_level)
 
     root = Path(args.root).resolve()
     logger.info("cli: root=%s dry_run=%s", root, args.dry_run)

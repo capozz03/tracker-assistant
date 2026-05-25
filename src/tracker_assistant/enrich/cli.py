@@ -11,6 +11,7 @@ from typing import Any
 
 from tracker_assistant.enrich import enrich_task, build_adapter
 from tracker_assistant.shared.io_utils import load_cached
+from tracker_assistant.shared.logging import configure_logging
 
 
 def main() -> int:
@@ -22,16 +23,11 @@ def main() -> int:
     parser.add_argument("--output", help="Путь для записи обогащённого task.json (по умолчанию: stdout)")
     parser.add_argument("--no-cache", action="store_true", help="Игнорировать кеш, загрузить свежие данные")
     parser.add_argument(
-        "--log-level", default="INFO",
+        "--log-level", default=None,
         choices=["DEBUG", "INFO", "WARNING", "ERROR"],
     )
     args = parser.parse_args()
-
-    logging.basicConfig(
-        level=getattr(logging, args.log_level.upper(), logging.INFO),
-        format="%(asctime)s %(levelname)s %(name)s %(message)s",
-        datefmt="%H:%M:%S",
-    )
+    configure_logging(args.log_level)
 
     root = Path(args.root).resolve()
 
