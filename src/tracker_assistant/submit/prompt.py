@@ -8,7 +8,7 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 PROMPT_TEMPLATE = """\
-Ты — ассистент по управлению задачами для команды разработчиков.
+Преобразуй требования ниже в JSON-массив задач Timetta. Верни только JSON, без пояснений.
 
 ## Стек проекта
 {stack_context}

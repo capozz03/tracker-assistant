@@ -10,6 +10,7 @@ import json
 import logging
 import re
 import subprocess
+import tempfile
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -20,18 +21,30 @@ def call_claude(prompt: str) -> Any:
 
     Извлекает JSON из ответа: сначала ищет ```json ... ``` fence,
     затем находит первый символ [ или {.
+    Промпт передаётся через stdin, чтобы избежать ограничений ARG_MAX.
+    Запускается в нейтральной директории: иначе claude подхватил бы
+    CLAUDE.md проекта и его ограничения попали бы в генерацию задач.
+    Флаг --bare НЕ используется: он читает только ANTHROPIC_API_KEY и
+    игнорирует OAuth/keychain (подписочный логин), что ломает вызов.
     """
     logger.debug("call_claude: prompt=%d chars", len(prompt))
-    result = subprocess.run(
-        ["claude", "-p", prompt],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
+    with tempfile.TemporaryDirectory() as neutral_cwd:
+        result = subprocess.run(
+            ["claude", "-p", "--dangerously-skip-permissions"],
+            input=prompt,
+            capture_output=True,
+            text=True,
+            check=False,
+            cwd=neutral_cwd,
+        )
     if result.returncode != 0:
-        raise SystemExit(
-            f"ERROR: claude -p завершился с ошибкой (код {result.returncode}):\n"
-            f"{result.stderr.strip()}"
+        detail = result.stderr.strip() or result.stdout.strip() or "(нет вывода)"
+        logger.error(
+            "call_claude: код=%d stderr=%r stdout=%r",
+            result.returncode, result.stderr[:500], result.stdout[:500],
+        )
+        raise RuntimeError(
+            f"claude -p завершился с ошибкой (код {result.returncode}):\n{detail}"
         )
     output = result.stdout.strip()
     logger.debug("call_claude: received %d chars", len(output))
@@ -48,8 +61,8 @@ def call_claude(prompt: str) -> Any:
     try:
         parsed = json.loads(output)
     except json.JSONDecodeError as exc:
-        raise SystemExit(
-            f"ERROR: claude -p вернул невалидный JSON: {exc}\n"
+        raise RuntimeError(
+            f"claude -p вернул невалидный JSON: {exc}\n"
             f"Вывод (первые 400 символов): {output[:400]}"
         )
     logger.debug("call_claude: parsed type=%s", type(parsed).__name__)
@@ -66,7 +79,7 @@ def call_claude_list(prompt: str) -> list[dict[str, Any]]:
     if isinstance(parsed, dict):
         parsed = [parsed]
     if not isinstance(parsed, list):
-        raise SystemExit(f"ERROR: ожидался JSON-массив, получено {type(parsed).__name__}")
+        raise RuntimeError(f"ожидался JSON-массив, получено {type(parsed).__name__}")
     return parsed
 
 
@@ -79,7 +92,7 @@ def call_claude_dict(prompt: str) -> dict[str, Any]:
     if isinstance(parsed, list) and len(parsed) == 1:
         return parsed[0]
     if not isinstance(parsed, dict):
-        raise SystemExit(
-            f"ERROR: ожидался JSON-объект, получено {type(parsed).__name__}"
+        raise RuntimeError(
+            f"ожидался JSON-объект, получено {type(parsed).__name__}"
         )
     return parsed

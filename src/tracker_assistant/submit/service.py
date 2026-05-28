@@ -25,7 +25,7 @@ def build_adapter(root: Path) -> TimettaAdapter:
     env = load_env(root)
     token = env.get("TIMETTA_TOKEN") or os.environ.get("TIMETTA_TOKEN", "")
     if not token:
-        raise SystemExit("ERROR: TIMETTA_TOKEN не задан (добавь в .env)")
+        raise RuntimeError("TIMETTA_TOKEN не задан (добавь в .env)")
     tags_dir_id = (
         env.get("TIMETTA_TAGS_DIR_ID")
         or os.environ.get("TIMETTA_TAGS_DIR_ID", "")

@@ -107,7 +107,7 @@ class TestCallClaudeStripFences:
 
     def test_raises_on_invalid_json_after_strip(self):
         wrapped = '```json\nnot valid json\n```'
-        with pytest.raises(SystemExit, match="невалидный JSON"):
+        with pytest.raises(RuntimeError, match="невалидный JSON"):
             self._run(wrapped)
 
     def test_raises_on_nonzero_exit(self):
@@ -117,5 +117,5 @@ class TestCallClaudeStripFences:
         mock_result.stderr = "error"
 
         with patch("subprocess.run", return_value=mock_result):
-            with pytest.raises(SystemExit, match="claude -p"):
+            with pytest.raises(RuntimeError, match="claude -p"):
                 call_claude("test prompt")

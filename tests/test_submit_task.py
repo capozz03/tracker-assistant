@@ -129,7 +129,7 @@ class TestSubmitTaskCallClaude:
         assert len(result) == 1
 
     def test_raises_on_invalid_json(self):
-        with pytest.raises(SystemExit, match="невалидный JSON"):
+        with pytest.raises(RuntimeError, match="невалидный JSON"):
             self._run("not json at all")
 
     def test_raises_on_nonzero_exit(self):
@@ -138,7 +138,7 @@ class TestSubmitTaskCallClaude:
         mock.stdout = ""
         mock.stderr = "claude crashed"
         with patch("subprocess.run", return_value=mock):
-            with pytest.raises(SystemExit, match="claude -p"):
+            with pytest.raises(RuntimeError, match="claude -p"):
                 call_claude_list("prompt")
 
 
