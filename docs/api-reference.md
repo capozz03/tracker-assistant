@@ -1,4 +1,4 @@
-[← Submit Pipeline](submit-pipeline.md) · [Back to README](../README.md) · [Timetta API: нюансы →](timetta-quirks.md)
+[← Telegram Bot](telegram-bot.md) · [Back to README](../README.md) · [Timetta API: нюансы →](timetta-quirks.md)
 
 # API-справочник
 

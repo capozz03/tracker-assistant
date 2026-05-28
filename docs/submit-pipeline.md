@@ -1,4 +1,4 @@
-[← Начало работы](getting-started.md) · [Back to README](../README.md) · [API-справочник →](api-reference.md)
+[← Начало работы](getting-started.md) · [Back to README](../README.md) · [Telegram Bot →](telegram-bot.md)
 
 # Submit Pipeline — авто-создание задач из требований
 

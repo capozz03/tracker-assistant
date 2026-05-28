@@ -1,4 +1,4 @@
-[Back to README](../README.md) · [Submit Pipeline →](submit-pipeline.md)
+[← Submit Pipeline](submit-pipeline.md) · [Back to README](../README.md) · [API-справочник →](api-reference.md)
 
 # Telegram Bot
 
@@ -76,9 +76,12 @@ uv run task-telegram --dry-run
 
 ```
 Входящее сообщение
-  ├── /start                    → инструкция по использованию
-  ├── /project                  → текущий проект чата
-  ├── /tasks                    → последние созданные задачи
+  ├── /start                    → приветствие + inline-кнопки (Выбрать проект / Избранные)
+  ├── /project                  → список проектов Timetta API как inline-клавиатура
+  ├── /projects                 → листаемый список из telegram_projects.json (5 на страницу)
+  ├── /favorites                → избранные проекты с кнопками выбора и удаления
+  ├── /tasks                    → история задач сессии с пагинацией и просмотром деталей
+  ├── Нажатие inline-кнопки    → CallbackQueryHandler (выбор проекта / пагинация / история)
   ├── Текст (обычный)           → submit_requirements → ответ с URL задач
   ├── Пересланное сообщение     → извлечение текста → submit_requirements
   ├── Фото + подпись            → submit_requirements(подпись) → attach_file(фото)
@@ -93,9 +96,40 @@ uv run task-telegram --dry-run
 
 | Команда | Описание |
 |---|---|
-| `/start` | Приветствие и краткая инструкция |
-| `/project` | Показать project_id и sprint_id текущего чата |
-| `/tasks` | Список URL последних созданных задач (текущая сессия) |
+| `/start` | Приветствие, краткая инструкция, inline-кнопки для быстрого старта |
+| `/project` | Получить список проектов из Timetta API и выбрать активный через кнопки |
+| `/projects` | Постраничный список проектов из `telegram_projects.json` (5 на страницу) |
+| `/favorites` | Показать избранные проекты; быстрый выбор или удаление из списка |
+| `/tasks` | История задач текущей сессии с пагинацией и просмотром деталей |
+
+### Выбор проекта через /project
+
+1. Команда запрашивает проекты через Timetta API и показывает их как inline-клавиатуру
+2. Нажатие на кнопку устанавливает проект активным для данного чата
+3. Активный проект отмечается `✅` в списке
+4. После выбора появляется кнопка «⭐ Добавить в избранные»
+
+### Выбор проекта через /projects (пагинация)
+
+`/projects` листает проекты из `telegram_projects.json` постранично — удобно, если проектов много:
+
+1. Команда показывает первую страницу (до 5 проектов)
+2. Кнопки `← Назад` / `Далее →` для навигации между страницами
+3. Нажатие на проект устанавливает его активным
+
+### Избранные проекты
+
+- Избранные хранятся в `context.user_data["favorites"]` (per-user, сбрасывается при рестарте)
+- `/favorites` отображает список с кнопками `⭐ Выбрать` и `✖ Убрать`
+- Можно добавить проект в избранные сразу после выбора через `/project`
+
+### История задач через /tasks
+
+`/tasks` показывает все задачи, созданные за текущую сессию:
+
+1. Команда выводит постраничный список задач (5 на страницу)
+2. Нажатие на задачу показывает её детали: название и URL в Timetta
+3. История сбрасывается при рестарте бота
 
 ---
 
@@ -174,6 +208,7 @@ src/tracker_assistant/telegram/
   config.py       # BotConfig, ProjectConfig, load_config(root)
   bot.py          # Application factory, регистрация хендлеров
   handlers.py     # handle_text, handle_photo, handle_document, команды
+  pagination.py   # Утилита пагинации: paginate, make_nav_keyboard, make_select_keyboard
   projects.py     # ProjectRegistry — маппинг chat_id → ProjectConfig
   vps_sync.py     # rsync / git clone синхронизация кодовой базы
   cli.py          # Тонкий CLI entry point
@@ -190,13 +225,19 @@ src/tracker_assistant/telegram/
 
 ## Хранение состояния
 
-Состояние между сообщениями хранится в `context.user_data` (in-memory per-session). При рестарте бота — сбрасывается.
+Состояние хранится in-memory и сбрасывается при рестарте бота.
 
-| Ключ | Значение |
-|---|---|
-| `last_task_ids` | `list[str]` — ID последних созданных задач |
+| Хранилище | Ключ | Значение |
+|---|---|---|
+| `user_data` | `last_task_ids` | `list[str]` — ID последних созданных задач |
+| `user_data` | `task_history` | `list[{"id": str, "summary": str, "url": str}]` — история задач сессии |
+| `user_data` | `favorites` | `list[{"id": str, "name": str}]` — избранные проекты |
+| `user_data` | `proj_page` | `int` — текущая страница в `/projects` |
+| `user_data` | `task_page` | `int` — текущая страница в `/tasks` |
+| `chat_data` | `active_project_id` | `str` — UUID выбранного проекта (per-chat) |
+| `chat_data` | `_project_cache` | `dict[str, str]` — кеш `{uuid: name}` из последнего вызова API |
 
-Для прикрепления фото/файла без подписи — предварительно создайте задачу отправив текст.
+Для прикрепления фото/файла без подписи — предварительно создайте задачу, отправив текст.
 
 ---
 
