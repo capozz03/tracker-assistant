@@ -128,6 +128,57 @@ TELEGRAM_TOKEN=your_bot_token_from_botfather
 
 > **💾 Commit 2** (после задачи 7): `feat(telegram): add message handlers (text, forwarded, photo, document)`
 
+
+---
+
+### Фаза 2.5 — Навигация (ConversationHandler + /back)
+
+> **⚠️ SUPERSEDED (2026-05-28).** Задачи 15 и 16 НЕ реализованы и закрыты как
+> устаревшие. Навигация была сделана другим способом — inline-клавиатуры и
+> `CallbackQueryHandler` (`/project`, `/projects`, `/favorites`, `/tasks`,
+> пагинация в `pagination.py`), что заменило стейт-машину `ConversationHandler`
+> и команду `/back`. Реализация этих задач создала бы конфликтующую вторую
+> систему навигации. См. `src/tracker_assistant/telegram/handlers.py`.
+
+- [x] ~~15. **Рефакторинг на `ConversationHandler`** — заменить простые `MessageHandler` на многошаговый диалог~~ **(SUPERSEDED — inline/callback навигация)**
+  - Определить состояния в `handlers.py`:
+    ```python
+    CHOOSING_PROJECT, ENTERING_REQUIREMENTS, CONFIRMING, ATTACHING = range(4)
+    ```
+  - `build_conversation_handler(registry, adapter_factory, cache_loader) -> ConversationHandler`
+  - Стейт-машина:
+    - `CHOOSING_PROJECT` — бот просит выбрать проект (только при мульти-проектном режиме); переход → `ENTERING_REQUIREMENTS`
+    - `ENTERING_REQUIREMENTS` — ждёт текст/фото с подписью; переход → `CONFIRMING`
+    - `CONFIRMING` — показывает превью задач, кнопки «✅ Создать» / «✏️ Изменить» / «❌ Отмена»; переход → `ATTACHING` или завершение
+    - `ATTACHING` — опционально: ждёт файлы для прикрепления, `/done` завершает
+  - Стек состояний: `context.user_data["state_stack"] = []` — каждый переход вперёд пушит предыдущее состояние
+  - Лог: `logger.debug("[tg] state: %s → %s chat=%s", prev_state, new_state, chat_id)`
+  - Файл: `src/tracker_assistant/telegram/handlers.py` (рефакторинг существующего кода)
+
+- [x] ~~16. **Команда `/back`** — возврат к предыдущему шагу~~ **(SUPERSEDED — inline/callback навигация)**
+  - `_handle_back(update, context)` — `CommandHandler("back", ...)`; зарегистрировать во всех состояниях кроме `CHOOSING_PROJECT`
+  - Логика:
+    ```python
+    stack = context.user_data.get("state_stack", [])
+    if not stack:
+        await update.message.reply_text("Вы уже на первом шаге.")
+        return current_state
+    prev_state = stack.pop()
+    context.user_data["state_stack"] = stack
+    # re-render предыдущего состояния
+    await _render_state(prev_state, update, context)
+    return prev_state
+    ```
+  - `/cancel` — выход из диалога в любом состоянии, очищает `state_stack`
+  - Лог: `logger.info("[tg] back: chat=%s stack_depth=%d → %s", chat_id, len(stack), prev_state)`
+  - Добавить тесты в `tests/test_telegram_handlers.py`:
+    - `test_back_returns_to_previous_state` — из `CONFIRMING` → `ENTERING_REQUIREMENTS`
+    - `test_back_at_first_step_sends_message` — из `CHOOSING_PROJECT` → сообщение «уже на первом шаге»
+    - `test_cancel_clears_state_stack` — `/cancel` очищает `state_stack`, возвращает `ConversationHandler.END`
+  - Файл: `src/tracker_assistant/telegram/handlers.py`
+
+> **💾 Commit 2.5** (после задачи 16): `feat(telegram): add ConversationHandler with /back navigation`
+
 ---
 
 ### Фаза 3 — VPS-синхронизация
@@ -239,6 +290,7 @@ TELEGRAM_TOKEN=your_bot_token_from_botfather
 |---|---|
 | 4 | `feat(telegram): foundation — config, project registry, bot factory` |
 | 7 | `feat(telegram): add message handlers (text, forwarded, photo, document)` |
+| 16 | `feat(telegram): add ConversationHandler with /back navigation` |
 | 9 | `feat(telegram): add VPS codebase sync (rsync + git clone)` |
 | 10 | `feat(telegram): add CLI entry point and example configs` |
 | 13 | `test(telegram): add tests for config, handlers, vps_sync` |
