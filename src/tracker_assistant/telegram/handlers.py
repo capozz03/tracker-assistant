@@ -7,12 +7,14 @@ import logging
 import os
 import tempfile
 import time
+import uuid
 from pathlib import Path
 from typing import Any
 
-from telegram import Update
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import (
     BaseHandler,
+    CallbackQueryHandler,
     CommandHandler,
     ContextTypes,
     MessageHandler,
@@ -23,6 +25,7 @@ from ..submit import submit_requirements
 from ..shared.io_utils import load_cached, load_env
 from ..timetta import TimettaAdapter
 from .config import BotConfig, ProjectConfig
+from .pagination import make_select_keyboard
 from .projects import ProjectRegistry
 from .vps_sync import sync_codebase
 
@@ -36,10 +39,23 @@ logger = logging.getLogger(__name__)
 
 def _extract_forwarded_text(message: Any) -> str | None:
     """Return text from a forwarded message, or None if not forwarded."""
-    if not message.forward_date:
+    if not message.forward_origin:
         return None
     # Forwarded messages keep original text/caption in the same fields
     return message.text or message.caption or None
+
+
+def _is_valid_project_id(project_id: str) -> bool:
+    """True if project_id is a real Timetta UUID.
+
+    Rejects empty values and placeholders like ``your_timetta_project_uuid``
+    that otherwise reach Timetta and trigger a cryptic 400 «Entity cannot be null».
+    """
+    try:
+        uuid.UUID(str(project_id))
+        return True
+    except (ValueError, AttributeError, TypeError):
+        return False
 
 
 def _format_results(results: list[dict[str, Any]]) -> str:
@@ -70,13 +86,34 @@ def _build_adapter(root: Path) -> TimettaAdapter:
     env = load_env(root)
     token = env.get("TIMETTA_TOKEN") or os.environ.get("TIMETTA_TOKEN", "")
     if not token:
-        raise SystemExit("ERROR: TIMETTA_TOKEN не задан (добавь в .env)")
+        raise RuntimeError("TIMETTA_TOKEN не задан (добавь в .env)")
     tags_dir_id = (
         env.get("TIMETTA_TAGS_DIR_ID")
         or os.environ.get("TIMETTA_TAGS_DIR_ID", "")
         or TimettaAdapter.DEFAULT_TAGS_DIR_ID
     )
     return TimettaAdapter(token=token, tags_dir_id=tags_dir_id)
+
+
+def _active_project(
+    chat_id: int,
+    context: ContextTypes.DEFAULT_TYPE,
+    registry: ProjectRegistry,
+) -> ProjectConfig:
+    """Return active ProjectConfig: dynamic selection > registry fallback.
+
+    Checks context.chat_data["active_project_id"] first (set via /project inline
+    keyboard). Falls back to registry.get_project(chat_id).
+    """
+    pid = (
+        context.chat_data.get("active_project_id", "")
+        if isinstance(context.chat_data, dict)
+        else ""
+    )
+    if pid:
+        logger.debug("[FIX] _active_project: dynamic project_id=%s chat=%s", pid, chat_id)
+        return ProjectConfig(project_id=pid)
+    return registry.get_project(chat_id)
 
 
 def _run_submit(
@@ -151,6 +188,207 @@ def make_handlers(
         List of BaseHandler instances to register with Application.
     """
 
+    # ------------------------------------------------------------------
+    # Inner helpers (capture config/registry via closure)
+    # ------------------------------------------------------------------
+
+    async def _fetch_project_content(
+        context: ContextTypes.DEFAULT_TYPE,
+        chat_id: int,
+    ) -> tuple[str, InlineKeyboardMarkup] | str:
+        """Fetch Timetta projects and build inline selection keyboard.
+
+        Returns (text, keyboard) on success, or an error string on failure.
+        Side-effect: caches {id: name} in context.chat_data["_project_cache"].
+        """
+        try:
+            adapter = _build_adapter(config.root)
+        except Exception:
+            return "❌ TIMETTA_TOKEN не задан. Добавьте его в .env."
+
+        try:
+            projects: list[dict[str, Any]] = await asyncio.to_thread(adapter.get_projects)
+        except Exception as exc:
+            logger.exception("[tg] get_projects failed chat=%s", chat_id)
+            return f"❌ Ошибка получения проектов: {exc}"
+
+        if not projects:
+            return "ℹ️ Проекты не найдены в Timetta."
+
+        cache: dict[str, str] = {p["id"]: p.get("name", p["id"]) for p in projects}
+        if isinstance(context.chat_data, dict):
+            context.chat_data["_project_cache"] = cache
+
+        active_id: str = (
+            context.chat_data.get("active_project_id", "")
+            if isinstance(context.chat_data, dict)
+            else ""
+        )
+        buttons: list[list[InlineKeyboardButton]] = []
+        for p in projects[:10]:
+            pid = p["id"]
+            name = p.get("name", pid)
+            label = f"✅ {name}" if pid == active_id else name
+            buttons.append([InlineKeyboardButton(label, callback_data=f"sel:{pid}")])
+
+        note = f"\n\n_Показаны первые 10 из {len(projects)}_" if len(projects) > 10 else ""
+        header = f"📂 Активный: *{cache.get(active_id, active_id)}*\n\n" if active_id else ""
+        logger.info("[FIX] _fetch_project_content: %d projects chat=%s", len(projects), chat_id)
+        return f"{header}Выберите проект:{note}", InlineKeyboardMarkup(buttons)
+
+    def _build_favorites_content(
+        context: ContextTypes.DEFAULT_TYPE,
+    ) -> tuple[str, InlineKeyboardMarkup]:
+        """Build favorites list text and inline keyboard."""
+        favorites: list[dict[str, str]] = context.user_data.get("favorites", [])
+        if not favorites:
+            return (
+                "⭐ Избранных проектов нет.\n\nДобавьте проект через /project.",
+                InlineKeyboardMarkup([
+                    [InlineKeyboardButton("📋 Открыть список проектов", callback_data="action:projects")],
+                ]),
+            )
+        buttons: list[list[InlineKeyboardButton]] = []
+        for fav in favorites:
+            fid = fav["id"]
+            fname = fav.get("name", fid)
+            buttons.append([
+                InlineKeyboardButton(f"⭐ {fname}", callback_data=f"sel:{fid}"),
+                InlineKeyboardButton("✖", callback_data=f"fav_rm:{fid}"),
+            ])
+        buttons.append([InlineKeyboardButton("📋 Все проекты", callback_data="action:projects")])
+        return "⭐ Избранные проекты:", InlineKeyboardMarkup(buttons)
+
+    # ------------------------------------------------------------------
+    # Pagination helpers
+    # ------------------------------------------------------------------
+
+    def _registry_items() -> list[dict[str, str]]:
+        """Convert registry projects to item dicts for make_select_keyboard."""
+        return [{"id": cfg.project_id, "name": key} for key, cfg in registry.list_projects()]
+
+    async def cmd_projects(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Handle /projects — registry project list with pagination."""
+        chat_id = update.effective_chat.id if update.effective_chat else 0
+        logger.debug("[tg] command: /projects chat=%s", chat_id)
+        items = _registry_items()
+        if not items:
+            await update.message.reply_text("ℹ️ Нет настроенных проектов.")
+            return
+        page = 0
+        context.user_data["proj_page"] = page
+        keyboard = make_select_keyboard("proj", items, "name", "id", page)
+        total = len(items)
+        await update.message.reply_text(
+            f"📂 Выберите проект ({total} всего):",
+            reply_markup=keyboard,
+        )
+        logger.info("[tg] proj: chat=%s total=%d page=%d", chat_id, total, page)
+
+    async def handle_proj_page(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Handle proj_page:N callback — navigate registry project pages."""
+        query = update.callback_query
+        if query is None:
+            return
+        await query.answer()
+        chat_id = update.effective_chat.id if update.effective_chat else 0
+        data = query.data or ""
+        try:
+            page = int(data.split(":", 1)[1])
+        except (IndexError, ValueError):
+            logger.warning("[tg] proj_page: bad data=%r chat=%s", data, chat_id)
+            return
+        context.user_data["proj_page"] = page
+        items = _registry_items()
+        keyboard = make_select_keyboard("proj", items, "name", "id", page)
+        await query.edit_message_reply_markup(reply_markup=keyboard)
+        logger.info("[tg] proj_page: chat=%s page=%d", chat_id, page)
+
+    async def handle_proj_sel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Handle proj_sel:UUID callback — activate a registry project."""
+        query = update.callback_query
+        if query is None:
+            return
+        await query.answer()
+        chat_id = update.effective_chat.id if update.effective_chat else 0
+        data = query.data or ""
+        pid = data.split(":", 1)[1] if ":" in data else ""
+        items = _registry_items()
+        pname = next((item["name"] for item in items if item["id"] == pid), pid)
+        if isinstance(context.chat_data, dict):
+            context.chat_data["active_project_id"] = pid
+        logger.info("[FIX] handle_proj_sel: chat=%s project_id=%s name=%s", chat_id, pid, pname)
+        await query.edit_message_text(
+            f"✅ Проект выбран: *{pname}*\n\nТеперь отправьте требования.",
+            parse_mode="Markdown",
+        )
+
+    async def cmd_tasks(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Handle /tasks — paginated history of created tasks for this session."""
+        chat_id = update.effective_chat.id if update.effective_chat else 0
+        logger.debug("[tg] command: /tasks chat=%s", chat_id)
+        history: list[dict[str, str]] = context.user_data.get("task_history", [])
+        if not history:
+            await update.message.reply_text(
+                "ℹ️ История задач пуста. Отправьте требования для создания задач."
+            )
+            return
+        page = 0
+        context.user_data["task_page"] = page
+        keyboard = make_select_keyboard("task", history, "summary", "id", page)
+        total = len(history)
+        await update.message.reply_text(
+            f"📋 История задач ({total} всего):",
+            reply_markup=keyboard,
+        )
+        logger.info("[tg] task_page: chat=%s page=%d total=%d", chat_id, page, total)
+
+    async def handle_task_page(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Handle task_page:N callback — navigate task history pages."""
+        query = update.callback_query
+        if query is None:
+            return
+        await query.answer()
+        chat_id = update.effective_chat.id if update.effective_chat else 0
+        data = query.data or ""
+        try:
+            page = int(data.split(":", 1)[1])
+        except (IndexError, ValueError):
+            logger.warning("[tg] task_page: bad data=%r chat=%s", data, chat_id)
+            return
+        context.user_data["task_page"] = page
+        history: list[dict[str, str]] = context.user_data.get("task_history", [])
+        keyboard = make_select_keyboard("task", history, "summary", "id", page)
+        await query.edit_message_reply_markup(reply_markup=keyboard)
+        total = len(history)
+        logger.info("[tg] task_page: chat=%s page=%d total=%d", chat_id, page, total)
+
+    async def handle_task_select(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Handle task_sel:UUID callback — show task details."""
+        query = update.callback_query
+        if query is None:
+            return
+        await query.answer()
+        chat_id = update.effective_chat.id if update.effective_chat else 0
+        data = query.data or ""
+        task_id = data.split(":", 1)[1] if ":" in data else ""
+        history: list[dict[str, str]] = context.user_data.get("task_history", [])
+        task = next((t for t in history if t.get("id") == task_id), None)
+        if task is None:
+            await query.edit_message_text("⚠️ Задача не найдена.")
+            return
+        summary = task.get("summary", "—")
+        url = task.get("url", "")
+        text = f"📌 *{summary}*"
+        if url:
+            text += f"\n\n🔗 {url}"
+        logger.info("[tg] task_sel: chat=%s task_id=%s", chat_id, task_id)
+        await query.edit_message_text(text, parse_mode="Markdown")
+
+    # ------------------------------------------------------------------
+    # Message handlers
+    # ------------------------------------------------------------------
+
     async def handle_text(
         update: Update, context: ContextTypes.DEFAULT_TYPE
     ) -> None:
@@ -169,16 +407,20 @@ def make_handlers(
         logger.info("[tg] text: chat=%s len=%d", chat_id, len(text))
 
         try:
-            project = registry.get_project(chat_id)
+            project = _active_project(chat_id, context, registry)
         except KeyError:
             await update.message.reply_text(
-                "❌ Проект не настроен. Добавьте запись в telegram_projects.json."
+                "❌ Проект не настроен. Выберите проект через /project."
             )
             return
 
-        if not project.project_id:
+        if not _is_valid_project_id(project.project_id):
+            logger.warning(
+                "[FIX] handle_text: invalid project_id=%r chat=%s",
+                project.project_id, chat_id,
+            )
             await update.message.reply_text(
-                "❌ project_id не задан. Проверьте telegram_projects.json или TIMETTA_PROJECT_ID в .env."
+                "❌ Проект не настроен. Выберите проект через /project."
             )
             return
 
@@ -198,6 +440,10 @@ def make_handlers(
 
         # Save last task ids for photo-without-caption flow
         context.user_data["last_task_ids"] = [r["id"] for r in results]
+        # Accumulate task history for /tasks command
+        history: list[dict[str, str]] = context.user_data.setdefault("task_history", [])
+        for r in results:
+            history.append({"summary": r.get("summary", ""), "url": r.get("url", ""), "id": r.get("id", "")})
         await update.message.reply_text(_format_results(results))
 
     async def _handle_media_message(
@@ -231,16 +477,20 @@ def make_handlers(
 
         if caption.strip():
             try:
-                project = registry.get_project(chat_id)
+                project = _active_project(chat_id, context, registry)
             except KeyError:
                 await update.message.reply_text(
-                    "❌ Проект не настроен. Добавьте запись в telegram_projects.json."
+                    "❌ Проект не настроен. Используйте /project для выбора проекта."
                 )
                 return
 
-            if not project.project_id:
+            if not _is_valid_project_id(project.project_id):
+                logger.warning(
+                    "[FIX] media: invalid project_id=%r chat=%s",
+                    project.project_id, chat_id,
+                )
                 await update.message.reply_text(
-                    "❌ project_id не задан. Проверьте конфигурацию."
+                    "❌ Проект не настроен. Выберите проект через /project."
                 )
                 return
 
@@ -258,6 +508,9 @@ def make_handlers(
 
             task_ids = [r["id"] for r in results]
             context.user_data["last_task_ids"] = task_ids
+            media_history: list[dict[str, str]] = context.user_data.setdefault("task_history", [])
+            for r in results:
+                media_history.append({"summary": r.get("summary", ""), "url": r.get("url", ""), "id": r.get("id", "")})
             await update.message.reply_text(_format_results(results))
         else:
             task_ids = context.user_data.get("last_task_ids", [])
@@ -279,7 +532,7 @@ def make_handlers(
 
             try:
                 adapter = _build_adapter(config.root)
-            except SystemExit as exc:
+            except Exception as exc:
                 await update.message.reply_text(f"❌ Ошибка конфигурации: {exc}")
                 return
 
@@ -349,48 +602,121 @@ def make_handlers(
         """Handle /start command."""
         chat_id = update.effective_chat.id if update.effective_chat else 0
         logger.debug("[tg] command: /start chat=%s", chat_id)
+        keyboard = InlineKeyboardMarkup([
+            [InlineKeyboardButton("📋 Выбрать проект", callback_data="action:projects")],
+            [InlineKeyboardButton("⭐ Избранные проекты", callback_data="action:favorites")],
+        ])
         await update.message.reply_text(
             "👋 Привет! Я помогу создавать задачи в Timetta.\n\n"
             "Просто напишите требования — я автоматически создам задачи.\n\n"
             "Команды:\n"
-            "  /project — текущий проект чата\n"
-            "  /tasks — последние созданные задачи\n\n"
-            "Поддерживаю: текст, пересланные сообщения, фото и файлы."
+            "  /project — выбрать проект из Timetta\n"
+            "  /favorites — избранные проекты\n\n"
+            "Поддерживаю: текст, пересланные сообщения, фото и файлы.",
+            reply_markup=keyboard,
         )
 
     async def cmd_project(
         update: Update, context: ContextTypes.DEFAULT_TYPE
     ) -> None:
-        """Handle /project command — show current chat's project."""
+        """Handle /project command — fetch projects from Timetta API as inline keyboard."""
         chat_id = update.effective_chat.id if update.effective_chat else 0
         logger.debug("[tg] command: /project chat=%s", chat_id)
-        try:
-            project = registry.get_project(chat_id)
-        except KeyError:
-            await update.message.reply_text("❌ Проект не настроен.")
-            return
-        sprint_info = f"\nСпринт: `{project.sprint_id}`" if project.sprint_id else ""
-        await update.message.reply_text(
-            f"📂 Текущий проект:\n"
-            f"ID: `{project.project_id}`{sprint_info}",
-            parse_mode="Markdown",
-        )
+        result = await _fetch_project_content(context, chat_id)
+        if isinstance(result, str):
+            await update.message.reply_text(result)
+        else:
+            text, keyboard = result
+            await update.message.reply_text(text, reply_markup=keyboard, parse_mode="Markdown")
 
-    async def cmd_tasks(
+    async def cmd_favorites(
         update: Update, context: ContextTypes.DEFAULT_TYPE
     ) -> None:
-        """Handle /tasks command — show last created task IDs."""
+        """Handle /favorites command — show favourite projects with quick-select buttons."""
         chat_id = update.effective_chat.id if update.effective_chat else 0
-        logger.debug("[tg] command: /tasks chat=%s", chat_id)
-        last_ids: list[str] = context.user_data.get("last_task_ids", [])
-        if not last_ids:
-            await update.message.reply_text("ℹ️ Последние задачи не найдены в этой сессии.")
+        logger.debug("[tg] command: /favorites chat=%s", chat_id)
+        text, keyboard = _build_favorites_content(context)
+        await update.message.reply_text(text, reply_markup=keyboard)
+        logger.info(
+            "[FIX] cmd_favorites: chat=%s favorites=%d",
+            chat_id, len(context.user_data.get("favorites", [])),
+        )
+
+    async def handle_callback(
+        update: Update, context: ContextTypes.DEFAULT_TYPE
+    ) -> None:
+        """Handle inline keyboard button presses.
+
+        Supported callback_data patterns:
+          sel:{uuid}       — set active project for this chat
+          fav_add:{uuid}   — add project to user favourites
+          fav_rm:{uuid}    — remove project from user favourites
+          action:projects  — show project selection list
+          action:favorites — show favourites list
+        """
+        query = update.callback_query
+        if query is None:
             return
-        lines = ["🗂 Последние задачи:"]
-        for tid in last_ids:
-            if tid:
-                lines.append(f"• https://app.timetta.com/issues/{tid}")
-        await update.message.reply_text("\n".join(lines))
+        await query.answer()
+
+        data = query.data or ""
+        chat_id = update.effective_chat.id if update.effective_chat else 0
+        logger.debug("[tg] callback: chat=%s data=%r", chat_id, data)
+
+        if data.startswith("sel:"):
+            pid = data[4:]
+            cache: dict[str, str] = (
+                context.chat_data.get("_project_cache", {})
+                if isinstance(context.chat_data, dict)
+                else {}
+            )
+            pname = cache.get(pid, pid)
+            if isinstance(context.chat_data, dict):
+                context.chat_data["active_project_id"] = pid
+            logger.info("[FIX] handle_callback: sel chat=%s project_id=%s name=%s", chat_id, pid, pname)
+            await query.edit_message_text(
+                f"✅ Выбран проект: *{pname}*\n\nТеперь отправьте требования.",
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("⭐ Добавить в избранные", callback_data=f"fav_add:{pid}")]
+                ]),
+                parse_mode="Markdown",
+            )
+
+        elif data.startswith("fav_add:"):
+            pid = data[8:]
+            cache = (
+                context.chat_data.get("_project_cache", {})
+                if isinstance(context.chat_data, dict)
+                else {}
+            )
+            pname = cache.get(pid, pid)
+            favorites: list[dict[str, str]] = context.user_data.setdefault("favorites", [])
+            if not any(f["id"] == pid for f in favorites):
+                favorites.append({"id": pid, "name": pname})
+            logger.info("[FIX] handle_callback: fav_add chat=%s project_id=%s", chat_id, pid)
+            await query.edit_message_text(
+                f"⭐ Добавлено в избранные: *{pname}*", parse_mode="Markdown"
+            )
+
+        elif data.startswith("fav_rm:"):
+            pid = data[7:]
+            context.user_data["favorites"] = [
+                f for f in context.user_data.get("favorites", []) if f["id"] != pid
+            ]
+            logger.info("[FIX] handle_callback: fav_rm chat=%s project_id=%s", chat_id, pid)
+            await query.edit_message_text("✖ Проект удалён из избранных.")
+
+        elif data == "action:projects":
+            result = await _fetch_project_content(context, chat_id)
+            if isinstance(result, str):
+                await query.edit_message_text(result)
+            else:
+                text, keyboard = result
+                await query.edit_message_text(text, reply_markup=keyboard, parse_mode="Markdown")
+
+        elif data == "action:favorites":
+            text, keyboard = _build_favorites_content(context)
+            await query.edit_message_text(text, reply_markup=keyboard)
 
     # ------------------------------------------------------------------
     # Assemble handler list
@@ -398,7 +724,15 @@ def make_handlers(
     return [
         CommandHandler("start", cmd_start),
         CommandHandler("project", cmd_project),
+        CommandHandler("projects", cmd_projects),
+        CommandHandler("favorites", cmd_favorites),
         CommandHandler("tasks", cmd_tasks),
+        # Pattern-specific callbacks before the generic catch-all
+        CallbackQueryHandler(handle_proj_page, pattern=r"^proj_page:"),
+        CallbackQueryHandler(handle_proj_sel, pattern=r"^proj_sel:"),
+        CallbackQueryHandler(handle_task_page, pattern=r"^task_page:"),
+        CallbackQueryHandler(handle_task_select, pattern=r"^task_sel:"),
+        CallbackQueryHandler(handle_callback),
         MessageHandler(filters.PHOTO, handle_photo),
         MessageHandler(filters.Document.ALL, handle_document),
         # Text last: catches forwarded messages and plain text

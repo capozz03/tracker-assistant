@@ -14,6 +14,7 @@ sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "src"))
 
 from tracker_assistant.telegram.handlers import (
+    _active_project,
     _extract_forwarded_text,
     _format_results,
     _run_submit,
@@ -28,11 +29,11 @@ from tracker_assistant.telegram.projects import ProjectRegistry
 # ---------------------------------------------------------------------------
 
 
-def make_mock_update(text="hello", chat_id=123, forward_date=None):
+def make_mock_update(text="hello", chat_id=123, forward_origin=None):
     msg = MagicMock()
     msg.text = text
     msg.caption = None
-    msg.forward_date = forward_date
+    msg.forward_origin = forward_origin
     msg.reply_text = AsyncMock()
     msg.photo = None
     msg.document = None
@@ -46,6 +47,7 @@ def make_mock_update(text="hello", chat_id=123, forward_date=None):
 def make_mock_context():
     ctx = MagicMock()
     ctx.user_data = {}
+    ctx.chat_data = {}
     return ctx
 
 
@@ -80,17 +82,49 @@ class TestFormatResults:
 class TestExtractForwardedText:
     def test_not_forwarded_returns_none(self):
         msg = MagicMock()
-        msg.forward_date = None
+        msg.forward_origin = None
         result = _extract_forwarded_text(msg)
         assert result is None
 
     def test_forwarded_returns_text(self):
         msg = MagicMock()
-        msg.forward_date = datetime(2024, 1, 1)
+        msg.forward_origin = MagicMock()  # any truthy MessageOrigin
         msg.text = "hello"
         msg.caption = None
         result = _extract_forwarded_text(msg)
         assert result == "hello"
+
+
+# ---------------------------------------------------------------------------
+# _active_project tests
+# ---------------------------------------------------------------------------
+
+
+class TestActiveProject:
+    def _make_registry(self, chat_id=123):
+        project = ProjectConfig(project_id="registry-proj")
+        return ProjectRegistry({f"chat_{chat_id}": project})
+
+    def test_returns_dynamic_project_when_set(self):
+        registry = self._make_registry()
+        ctx = make_mock_context()
+        ctx.chat_data = {"active_project_id": "dynamic-uuid"}
+        result = _active_project(123, ctx, registry)
+        assert result.project_id == "dynamic-uuid"
+
+    def test_falls_back_to_registry_when_no_dynamic(self):
+        registry = self._make_registry(chat_id=123)
+        ctx = make_mock_context()
+        ctx.chat_data = {}
+        result = _active_project(123, ctx, registry)
+        assert result.project_id == "registry-proj"
+
+    def test_falls_back_to_registry_when_chat_data_not_dict(self):
+        registry = self._make_registry(chat_id=123)
+        ctx = make_mock_context()
+        ctx.chat_data = None
+        result = _active_project(123, ctx, registry)
+        assert result.project_id == "registry-proj"
 
 
 # ---------------------------------------------------------------------------
@@ -106,7 +140,7 @@ class TestHandleText:
         return handlers[-1].callback
 
     def _make_registry_with_project(self, chat_id=123):
-        project = ProjectConfig(project_id="proj-1")
+        project = ProjectConfig(project_id="11111111-1111-1111-1111-111111111111")
         registry = ProjectRegistry({f"chat_{chat_id}": project})
         return registry
 
@@ -140,6 +174,34 @@ class TestHandleText:
 
         asyncio.run(run_test())
 
+    def test_handle_text_uses_dynamic_project_from_chat_data(self, tmp_path):
+        registry = ProjectRegistry({})  # no static projects
+        config = self._make_config(tmp_path)
+        handle_text = self._get_handle_text(registry, config)
+
+        update = make_mock_update(text="build feature", chat_id=123)
+        context = make_mock_context()
+        context.chat_data = {"active_project_id": "22222222-2222-2222-2222-222222222222"}
+
+        fake_results = [{"summary": "Feature", "url": "http://x", "id": "t1"}]
+
+        async def run_test():
+            with patch(
+                "tracker_assistant.telegram.handlers._run_submit",
+                return_value=fake_results,
+            ) as mock_submit:
+                with patch(
+                    "tracker_assistant.telegram.handlers._maybe_sync_vps",
+                    new=AsyncMock(return_value=None),
+                ):
+                    await handle_text(update, context)
+
+            mock_submit.assert_called_once()
+            project_arg = mock_submit.call_args[0][1]
+            assert project_arg.project_id == "22222222-2222-2222-2222-222222222222"
+
+        asyncio.run(run_test())
+
     def test_handle_text_no_project_error(self, tmp_path):
         # Registry with no matching project and no default — raises KeyError
         registry = ProjectRegistry({})
@@ -157,6 +219,28 @@ class TestHandleText:
 
         asyncio.run(run_test())
 
+    def test_handle_text_placeholder_project_id_rejected(self, tmp_path):
+        # Placeholder/non-UUID project_id must not reach Timetta (would 400).
+        project = ProjectConfig(project_id="your_timetta_project_uuid")
+        registry = ProjectRegistry({"chat_123": project})
+        config = self._make_config(tmp_path)
+        handle_text = self._get_handle_text(registry, config)
+
+        update = make_mock_update(text="create tasks", chat_id=123)
+        context = make_mock_context()
+
+        async def run_test():
+            with patch(
+                "tracker_assistant.telegram.handlers._run_submit",
+            ) as mock_submit:
+                await handle_text(update, context)
+
+            mock_submit.assert_not_called()
+            update.message.reply_text.assert_called_once()
+            assert "не настроен" in update.message.reply_text.call_args[0][0]
+
+        asyncio.run(run_test())
+
 
 # ---------------------------------------------------------------------------
 # handle_photo closure test
@@ -165,10 +249,13 @@ class TestHandleText:
 
 class TestHandlePhoto:
     def _get_handle_photo(self, registry, config):
-        """Extract handle_photo handler (4th handler, index 3)."""
+        """Extract handle_photo handler by locating the PHOTO MessageHandler."""
+        from telegram.ext import MessageHandler, filters as tg_filters
         handlers = make_handlers(registry, config)
-        # CommandHandler x3, then PHOTO handler at index 3
-        return handlers[3].callback
+        for h in handlers:
+            if isinstance(h, MessageHandler) and h.filters == tg_filters.PHOTO:
+                return h.callback
+        raise AssertionError("handle_photo not found in handlers list")
 
     def test_handle_photo_no_caption_attaches_to_last(self, tmp_path):
         project = ProjectConfig(project_id="proj-1")
@@ -179,7 +266,7 @@ class TestHandlePhoto:
         # Build update with a photo and no caption
         msg = MagicMock()
         msg.caption = None
-        msg.forward_date = None
+        msg.forward_origin = None
         msg.reply_text = AsyncMock()
 
         # Mock the photo object
@@ -216,5 +303,230 @@ class TestHandlePhoto:
             fake_adapter.attach_file.assert_called_once()
             call_args = fake_adapter.attach_file.call_args[0]
             assert call_args[0] == "task-uuid-1"
+
+        asyncio.run(run_test())
+
+
+# ---------------------------------------------------------------------------
+# cmd_project tests
+# ---------------------------------------------------------------------------
+
+
+class TestCmdProject:
+    def _get_cmd_project(self, registry, config):
+        handlers = make_handlers(registry, config)
+        return handlers[1].callback  # index 1
+
+    def _make_config(self, tmp_path):
+        return BotConfig(token="tok", root=tmp_path, projects={})
+
+    def test_shows_projects_from_api(self, tmp_path):
+        registry = ProjectRegistry({})
+        config = self._make_config(tmp_path)
+        cmd_project = self._get_cmd_project(registry, config)
+
+        update = make_mock_update(chat_id=10)
+        context = make_mock_context()
+
+        fake_projects = [
+            {"id": "uuid-1", "name": "Alpha"},
+            {"id": "uuid-2", "name": "Beta"},
+        ]
+
+        async def run_test():
+            with patch("tracker_assistant.telegram.handlers._build_adapter") as mock_build:
+                mock_adapter = MagicMock()
+                mock_adapter.get_projects = MagicMock(return_value=fake_projects)
+                mock_build.return_value = mock_adapter
+                await cmd_project(update, context)
+
+            update.message.reply_text.assert_called_once()
+            # Project cache should be populated
+            assert context.chat_data.get("_project_cache") == {"uuid-1": "Alpha", "uuid-2": "Beta"}
+
+        asyncio.run(run_test())
+
+    def test_error_when_no_token(self, tmp_path):
+        registry = ProjectRegistry({})
+        config = self._make_config(tmp_path)
+        cmd_project = self._get_cmd_project(registry, config)
+
+        update = make_mock_update(chat_id=10)
+        context = make_mock_context()
+
+        async def run_test():
+            with patch(
+                "tracker_assistant.telegram.handlers._build_adapter",
+                side_effect=RuntimeError("no token"),
+            ):
+                await cmd_project(update, context)
+
+            update.message.reply_text.assert_called_once()
+            msg = update.message.reply_text.call_args[0][0]
+            assert "TIMETTA_TOKEN" in msg
+
+        asyncio.run(run_test())
+
+
+# ---------------------------------------------------------------------------
+# cmd_favorites tests
+# ---------------------------------------------------------------------------
+
+
+class TestCmdFavorites:
+    def _get_cmd_favorites(self, registry, config):
+        from telegram.ext import CommandHandler as CH
+        handlers = make_handlers(registry, config)
+        for h in handlers:
+            if isinstance(h, CH) and "favorites" in h.commands:
+                return h.callback
+        raise AssertionError("cmd_favorites not found in handlers list")
+
+    def _make_config(self, tmp_path):
+        return BotConfig(token="tok", root=tmp_path, projects={})
+
+    def test_empty_favorites_shows_hint(self, tmp_path):
+        registry = ProjectRegistry({})
+        config = self._make_config(tmp_path)
+        cmd_favorites = self._get_cmd_favorites(registry, config)
+
+        update = make_mock_update(chat_id=5)
+        context = make_mock_context()
+        context.user_data = {}
+
+        async def run_test():
+            await cmd_favorites(update, context)
+            update.message.reply_text.assert_called_once()
+            msg = update.message.reply_text.call_args[0][0]
+            assert "нет" in msg
+
+        asyncio.run(run_test())
+
+    def test_with_favorites_shows_buttons(self, tmp_path):
+        registry = ProjectRegistry({})
+        config = self._make_config(tmp_path)
+        cmd_favorites = self._get_cmd_favorites(registry, config)
+
+        update = make_mock_update(chat_id=5)
+        context = make_mock_context()
+        context.user_data = {"favorites": [{"id": "fav-uuid", "name": "MyProject"}]}
+
+        async def run_test():
+            await cmd_favorites(update, context)
+            update.message.reply_text.assert_called_once()
+            _, kwargs = update.message.reply_text.call_args
+            keyboard = kwargs.get("reply_markup")
+            assert keyboard is not None
+            # Inline keyboard should contain the favourite project
+            labels = [btn.text for row in keyboard.inline_keyboard for btn in row]
+            assert any("MyProject" in label for label in labels)
+
+        asyncio.run(run_test())
+
+
+# ---------------------------------------------------------------------------
+# handle_callback tests
+# ---------------------------------------------------------------------------
+
+
+class TestCallbackHandler:
+    def _get_handle_callback(self, registry, config):
+        from telegram.ext import CallbackQueryHandler as CQH
+        handlers = make_handlers(registry, config)
+        # Return the generic (no-pattern) CallbackQueryHandler
+        for h in handlers:
+            if isinstance(h, CQH) and h.pattern is None:
+                return h.callback
+        raise AssertionError("generic handle_callback not found in handlers list")
+
+    def _make_config(self, tmp_path):
+        return BotConfig(token="tok", root=tmp_path, projects={})
+
+    def _make_callback_update(self, data, chat_id=10):
+        query = MagicMock()
+        query.data = data
+        query.answer = AsyncMock()
+        query.edit_message_text = AsyncMock()
+        update = MagicMock()
+        update.callback_query = query
+        update.effective_chat = MagicMock()
+        update.effective_chat.id = chat_id
+        return update, query
+
+    def test_sel_sets_active_project(self, tmp_path):
+        registry = ProjectRegistry({})
+        config = self._make_config(tmp_path)
+        handle_callback = self._get_handle_callback(registry, config)
+
+        update, query = self._make_callback_update("sel:test-project-uuid")
+        context = make_mock_context()
+        context.chat_data = {"_project_cache": {"test-project-uuid": "Test Project"}}
+
+        async def run_test():
+            await handle_callback(update, context)
+            assert context.chat_data["active_project_id"] == "test-project-uuid"
+            query.answer.assert_called_once()
+            query.edit_message_text.assert_called_once()
+            msg = query.edit_message_text.call_args[0][0]
+            assert "Test Project" in msg
+
+        asyncio.run(run_test())
+
+    def test_fav_add_appends_to_favorites(self, tmp_path):
+        registry = ProjectRegistry({})
+        config = self._make_config(tmp_path)
+        handle_callback = self._get_handle_callback(registry, config)
+
+        pid = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+        update, query = self._make_callback_update(f"fav_add:{pid}")
+        context = make_mock_context()
+        context.chat_data = {"_project_cache": {pid: "Cool Project"}}
+
+        async def run_test():
+            await handle_callback(update, context)
+            favs = context.user_data.get("favorites", [])
+            assert len(favs) == 1
+            assert favs[0]["id"] == pid
+            assert favs[0]["name"] == "Cool Project"
+
+        asyncio.run(run_test())
+
+    def test_fav_add_no_duplicates(self, tmp_path):
+        registry = ProjectRegistry({})
+        config = self._make_config(tmp_path)
+        handle_callback = self._get_handle_callback(registry, config)
+
+        pid = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+        update, query = self._make_callback_update(f"fav_add:{pid}")
+        context = make_mock_context()
+        context.chat_data = {"_project_cache": {pid: "Cool"}}
+        context.user_data = {"favorites": [{"id": pid, "name": "Cool"}]}
+
+        async def run_test():
+            await handle_callback(update, context)
+            assert len(context.user_data["favorites"]) == 1  # no duplicate
+
+        asyncio.run(run_test())
+
+    def test_fav_rm_removes_from_favorites(self, tmp_path):
+        registry = ProjectRegistry({})
+        config = self._make_config(tmp_path)
+        handle_callback = self._get_handle_callback(registry, config)
+
+        pid = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+        update, query = self._make_callback_update(f"fav_rm:{pid}")
+        context = make_mock_context()
+        context.user_data = {
+            "favorites": [
+                {"id": pid, "name": "Remove Me"},
+                {"id": "other-uuid", "name": "Keep Me"},
+            ]
+        }
+
+        async def run_test():
+            await handle_callback(update, context)
+            favs = context.user_data.get("favorites", [])
+            assert len(favs) == 1
+            assert favs[0]["id"] == "other-uuid"
 
         asyncio.run(run_test())
