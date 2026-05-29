@@ -92,6 +92,7 @@ def create_tasks(
         task_dict = dict(original)
         # Tags идут отдельным PATCH — POST /Issues не принимает теги
         raw_tags = task_dict.pop("tags", [])
+        logger.debug("[TAG] raw from claude [%d/%d]: %r", idx, total, raw_tags)
         pending_tags = resolve_tags(raw_tags, tags)
         if raw_tags and not pending_tags:
             logger.warning("[TAG] Ни один тег не разрешён из %r", raw_tags)

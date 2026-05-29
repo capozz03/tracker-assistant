@@ -173,9 +173,19 @@ class TestResolveTagsFunction:
         result = resolve_tags(["фронтенд", "БЕКЕНД"], _KNOWN_TAGS)
         assert result == ["aaa-111", "bbb-222"]
 
-    def test_english_name_not_resolved(self):
-        """English names like 'frontend' don't match Russian 'Фронтенд'."""
-        result = resolve_tags(["frontend"], _KNOWN_TAGS)
+    def test_english_synonym_resolves(self):
+        """English layer synonyms map to the Russian layer tags."""
+        assert resolve_tags(["frontend"], _KNOWN_TAGS) == ["aaa-111"]
+        assert resolve_tags(["backend"], _KNOWN_TAGS) == ["bbb-222"]
+        assert resolve_tags(["front-end", "be"], _KNOWN_TAGS) == ["aaa-111", "bbb-222"]
+
+    def test_yo_e_normalization(self):
+        """'Бэкенд' (через Э) резолвится в реальный тег 'Бекенд' (через Е)."""
+        assert resolve_tags(["Бэкенд"], _KNOWN_TAGS) == ["bbb-222"]
+
+    def test_unknown_english_word_not_resolved(self):
+        """Non-synonym English words still don't resolve."""
+        result = resolve_tags(["javascript"], _KNOWN_TAGS)
         assert result == []
 
     def test_code_to_uuid(self):
