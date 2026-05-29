@@ -9,7 +9,7 @@ import tempfile
 import time
 import uuid
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import (
@@ -21,7 +21,7 @@ from telegram.ext import (
     filters,
 )
 
-from ..submit import submit_requirements
+from ..submit import create_tasks, generate_tasks
 from ..shared.io_utils import load_cached, load_env
 from ..timetta import TimettaAdapter
 from .config import BotConfig, ProjectConfig
@@ -119,27 +119,112 @@ def _active_project(
     return registry.get_project(chat_id)
 
 
-def _run_submit(
+def _run_generate(
     text: str,
     project: ProjectConfig,
     root: Path,
     project_path_override: Path | None = None,
-) -> list[dict[str, Any]]:
-    """Synchronous wrapper that builds adapter and calls submit_requirements."""
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
+    """Build adapter and generate tasks WITHOUT creating them in Timetta.
+
+    Returns (task_dicts, users, tags). users/tags are returned so the preview
+    can map assignee/tag UUIDs to human-readable names without re-fetching.
+    """
     adapter = _build_adapter(root)
     users = load_cached(root, "users", adapter.get_users)
     tags = load_cached(root, "tags", adapter.get_tags)
     effective_path = project_path_override if project_path_override is not None else project.project_path
-    return submit_requirements(
-        requirements=text,
-        project_id=project.project_id,
-        adapter=adapter,
-        users=users,
+    task_dicts = generate_tasks(
+        text,
+        project.project_id,
+        effective_path,
+        root,
         tags=tags,
-        project_path=effective_path,
-        root=root,
+        users=users,
         sprint_id=project.sprint_id,
     )
+    return task_dicts, users, tags
+
+
+def _run_create(
+    task_dicts: list[dict[str, Any]],
+    root: Path,
+) -> list[dict[str, Any]]:
+    """Build adapter and create previously generated tasks in Timetta."""
+    adapter = _build_adapter(root)
+    tags = load_cached(root, "tags", adapter.get_tags)
+    return create_tasks(task_dicts, adapter=adapter, tags=tags, root=root)
+
+
+def _truncate(text: str, limit: int = 150) -> str:
+    """Collapse whitespace and truncate to *limit* chars with an ellipsis."""
+    collapsed = " ".join(text.split())
+    if len(collapsed) <= limit:
+        return collapsed
+    return collapsed[:limit].rstrip() + "…"
+
+
+def _format_preview(
+    task_dicts: list[dict[str, Any]],
+    users: list[dict[str, Any]],
+    tags: list[dict[str, Any]],
+) -> str:
+    """Detailed preview of generated tasks for user review before creation.
+
+    One block per task: number + summary, truncated description, then the
+    resolved assignee display name and tag names (raw value as fallback).
+    """
+    n = len(task_dicts)
+    user_names = {u.get("id", ""): u.get("displayName", "") for u in users}
+    tag_names = {t.get("id", ""): t.get("name", "") for t in tags}
+    lines = [
+        f"📋 Проверь задачи ({n}). Всё ок — нажми «Создать», или пришли правки текстом.",
+    ]
+    for idx, td in enumerate(task_dicts, 1):
+        summary = td.get("summary", "—")
+        desc = _truncate(td.get("description") or "")
+        assignee_raw = td.get("assignee", "")
+        assignee = user_names.get(assignee_raw) or assignee_raw or "—"
+        tag_labels = [tag_names.get(t) or t for t in td.get("tags", [])]
+        tags_str = ", ".join(label for label in tag_labels if label) or "—"
+        lines.append("")
+        lines.append(f"{idx}. {summary}")
+        if desc:
+            lines.append(f"   {desc}")
+        lines.append(f"   👤 {assignee}   🏷 {tags_str}")
+    return "\n".join(lines)
+
+
+async def _attach_to_tasks(
+    adapter: TimettaAdapter,
+    task_ids: list[str],
+    *,
+    file_id: str,
+    filename: str,
+    get_file: Callable[[], Any],
+    label: str = "",
+    chat_id: int = 0,
+) -> int:
+    """Download a Telegram file and attach it to each task; return count attached.
+
+    *get_file* is a zero-arg callable returning an awaitable that resolves to a
+    Telegram File (e.g. ``tg_obj.get_file`` or ``lambda: bot.get_file(file_id)``).
+    """
+    suffix = Path(filename).suffix or ".bin"
+    attached = 0
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        tmp_path = Path(tmp_dir) / f"{file_id}{suffix}"
+        tg_file = await get_file()
+        await tg_file.download_to_drive(tmp_path)
+        file_size = tmp_path.stat().st_size
+        logger.info("[tg] attach: chat=%s label=%s file_size=%d", chat_id, label, file_size)
+        for task_id in task_ids:
+            if not task_id:
+                continue
+            result = await asyncio.to_thread(adapter.attach_file, task_id, str(tmp_path))
+            if result is not None:
+                attached += 1
+    return attached
 
 
 async def _maybe_sync_vps(
@@ -433,6 +518,141 @@ def make_handlers(
         await query.edit_message_text(text, parse_mode="Markdown")
 
     # ------------------------------------------------------------------
+    # Preview / confirmation helpers
+    # ------------------------------------------------------------------
+
+    _SUBMIT_KEYBOARD = InlineKeyboardMarkup([[
+        InlineKeyboardButton("✅ Создать", callback_data="submit_ok:"),
+        InlineKeyboardButton("❌ Отмена", callback_data="submit_cancel:"),
+    ]])
+
+    async def _send_preview(
+        update: Update,
+        context: ContextTypes.DEFAULT_TYPE,
+        *,
+        task_dicts: list[dict[str, Any]],
+        users: list[dict[str, Any]],
+        tags: list[dict[str, Any]],
+        requirements: str,
+        project: ProjectConfig,
+        project_path: Path | None,
+        media: dict[str, str] | None,
+    ) -> None:
+        """Store pending state and send the review preview with confirm buttons."""
+        if isinstance(context.chat_data, dict):
+            context.chat_data["pending_submit"] = {
+                "requirements": requirements,
+                "task_dicts": task_dicts,
+                "project_id": project.project_id,
+                "project_path": project_path,
+                "sprint_id": project.sprint_id,
+                "media": media,
+            }
+        await update.message.reply_text(
+            _format_preview(task_dicts, users, tags),
+            reply_markup=_SUBMIT_KEYBOARD,
+        )
+
+    async def _handle_correction(
+        update: Update,
+        context: ContextTypes.DEFAULT_TYPE,
+        pending: dict[str, Any],
+        correction: str,
+    ) -> None:
+        """Re-generate the pending batch with the user's free-text correction."""
+        chat_id = update.effective_chat.id if update.effective_chat else 0
+        requirements = (
+            pending["requirements"] + "\n\nПравки от пользователя:\n" + correction
+        )
+        project = ProjectConfig(
+            project_id=pending.get("project_id", ""),
+            sprint_id=pending.get("sprint_id", ""),
+            project_path=pending.get("project_path"),
+        )
+        await update.message.reply_text("✏️ Учёл правки, пересобираю…")
+        try:
+            task_dicts, users, tags = await asyncio.to_thread(
+                _run_generate, requirements, project, config.root, None
+            )
+        except Exception as exc:
+            logger.exception("[tg] correction failed: chat=%s", chat_id)
+            await update.message.reply_text(f"❌ Ошибка создания задач: {exc}")
+            return
+
+        if not task_dicts:
+            await update.message.reply_text("⚠️ Задачи не сгенерированы.")
+            return
+
+        await _send_preview(
+            update, context,
+            task_dicts=task_dicts, users=users, tags=tags,
+            requirements=requirements, project=project,
+            project_path=pending.get("project_path"), media=pending.get("media"),
+        )
+        logger.info("[tg] correction: chat=%s len=%d", chat_id, len(correction))
+
+    async def _generate_and_preview(
+        update: Update,
+        context: ContextTypes.DEFAULT_TYPE,
+        *,
+        requirements: str,
+        media: dict[str, str] | None,
+    ) -> None:
+        """Validate project, sync VPS, generate tasks, and show the review preview.
+
+        Shared by the plain-text and media-with-caption entry points (the only
+        difference is the requirements source and whether a file is pending).
+        """
+        chat_id = update.effective_chat.id if update.effective_chat else 0
+        try:
+            project = _active_project(chat_id, context, registry)
+        except KeyError:
+            await update.message.reply_text(
+                "❌ Проект не настроен. Выберите проект через /project."
+            )
+            return
+
+        if not _is_valid_project_id(project.project_id):
+            logger.warning(
+                "[tg] invalid project_id=%r chat=%s", project.project_id, chat_id
+            )
+            await update.message.reply_text(
+                "❌ Проект не настроен. Выберите проект через /project."
+            )
+            return
+
+        # VPS sync before generation (stack analysis uses project_path)
+        vps_cache = config.root / "cache" / "vps"
+        project_path_override = await _maybe_sync_vps(update, project, vps_cache)
+
+        await update.message.reply_text("⏳ Формирую задачи…")
+        try:
+            task_dicts, users, tags = await asyncio.to_thread(
+                _run_generate, requirements, project, config.root, project_path_override
+            )
+        except Exception as exc:
+            logger.exception("[tg] generate failed: chat=%s", chat_id)
+            await update.message.reply_text(f"❌ Ошибка создания задач: {exc}")
+            return
+
+        if not task_dicts:
+            await update.message.reply_text("⚠️ Задачи не сгенерированы.")
+            return
+
+        effective_path = (
+            project_path_override if project_path_override is not None else project.project_path
+        )
+        await _send_preview(
+            update, context,
+            task_dicts=task_dicts, users=users, tags=tags,
+            requirements=requirements, project=project,
+            project_path=effective_path, media=media,
+        )
+        logger.info(
+            "[tg] generate: chat=%s tasks=%d media=%s", chat_id, len(task_dicts), bool(media)
+        )
+
+    # ------------------------------------------------------------------
     # Message handlers
     # ------------------------------------------------------------------
 
@@ -451,47 +671,18 @@ def make_handlers(
             await update.message.reply_text("⚠️ Сообщение пустое — нечего обрабатывать.")
             return
 
+        # While a generated batch awaits confirmation, any text is a correction.
+        pending = (
+            context.chat_data.get("pending_submit")
+            if isinstance(context.chat_data, dict)
+            else None
+        )
+        if pending:
+            await _handle_correction(update, context, pending, text)
+            return
+
         logger.info("[tg] text: chat=%s len=%d", chat_id, len(text))
-
-        try:
-            project = _active_project(chat_id, context, registry)
-        except KeyError:
-            await update.message.reply_text(
-                "❌ Проект не настроен. Выберите проект через /project."
-            )
-            return
-
-        if not _is_valid_project_id(project.project_id):
-            logger.warning(
-                "[FIX] handle_text: invalid project_id=%r chat=%s",
-                project.project_id, chat_id,
-            )
-            await update.message.reply_text(
-                "❌ Проект не настроен. Выберите проект через /project."
-            )
-            return
-
-        # VPS sync before submit (if configured)
-        vps_cache = config.root / "cache" / "vps"
-        project_path_override = await _maybe_sync_vps(update, project, vps_cache)
-
-        await update.message.reply_text("⏳ Создаю задачи…")
-        try:
-            results = await asyncio.to_thread(
-                _run_submit, text, project, config.root, project_path_override
-            )
-        except Exception as exc:
-            logger.exception("[tg] submit failed: chat=%s", chat_id)
-            await update.message.reply_text(f"❌ Ошибка создания задач: {exc}")
-            return
-
-        # Save last task ids for photo-without-caption flow
-        context.user_data["last_task_ids"] = [r["id"] for r in results]
-        # Accumulate task history for /tasks command
-        history: list[dict[str, str]] = context.user_data.setdefault("task_history", [])
-        for r in results:
-            history.append({"summary": r.get("summary", ""), "url": r.get("url", ""), "id": r.get("id", "")})
-        await update.message.reply_text(_format_results(results))
+        await _generate_and_preview(update, context, requirements=text, media=None)
 
     async def _handle_media_message(
         update: Update,
@@ -505,8 +696,9 @@ def make_handlers(
     ) -> None:
         """Shared logic for photo and document handlers.
 
-        If *caption* is non-empty: submits it as requirements, stores task IDs,
-        then downloads and attaches the file to each created task.
+        If *caption* is non-empty: generates tasks and shows a review preview;
+        the file is attached to the created tasks only after confirmation
+        (its file_id is kept in ``pending_submit["media"]``).
         If *caption* is empty: attaches to ``context.user_data["last_task_ids"]``.
 
         Args:
@@ -520,79 +712,32 @@ def make_handlers(
         """
         assert update.message is not None  # noqa: S101
         chat_id = update.effective_chat.id if update.effective_chat else 0
-        task_ids: list[str] = []
 
         if caption.strip():
-            try:
-                project = _active_project(chat_id, context, registry)
-            except KeyError:
-                await update.message.reply_text(
-                    "❌ Проект не настроен. Используйте /project для выбора проекта."
-                )
-                return
+            # Caption present → generate a preview; the file is attached on confirm.
+            media = {"file_id": file_id, "filename": filename, "label": media_label}
+            await _generate_and_preview(update, context, requirements=caption, media=media)
+            return
 
-            if not _is_valid_project_id(project.project_id):
-                logger.warning(
-                    "[FIX] media: invalid project_id=%r chat=%s",
-                    project.project_id, chat_id,
-                )
-                await update.message.reply_text(
-                    "❌ Проект не настроен. Выберите проект через /project."
-                )
-                return
+        # No caption → attach to the last created tasks.
+        task_ids = context.user_data.get("last_task_ids", [])
+        if not task_ids:
+            await update.message.reply_text(
+                "⚠️ Нет задач для прикрепления. Сначала отправьте текст с требованиями."
+            )
+            return
 
-            vps_cache = config.root / "cache" / "vps"
-            project_path_override = await _maybe_sync_vps(update, project, vps_cache)
-            await update.message.reply_text("⏳ Создаю задачи…")
-            try:
-                results = await asyncio.to_thread(
-                    _run_submit, caption, project, config.root, project_path_override
-                )
-            except Exception as exc:
-                logger.exception("[tg] media submit failed: chat=%s", chat_id)
-                await update.message.reply_text(f"❌ Ошибка создания задач: {exc}")
-                return
+        try:
+            adapter = _build_adapter(config.root)
+        except Exception as exc:
+            await update.message.reply_text(f"❌ Ошибка конфигурации: {exc}")
+            return
 
-            task_ids = [r["id"] for r in results]
-            context.user_data["last_task_ids"] = task_ids
-            media_history: list[dict[str, str]] = context.user_data.setdefault("task_history", [])
-            for r in results:
-                media_history.append({"summary": r.get("summary", ""), "url": r.get("url", ""), "id": r.get("id", "")})
-            await update.message.reply_text(_format_results(results))
-        else:
-            task_ids = context.user_data.get("last_task_ids", [])
-            if not task_ids:
-                await update.message.reply_text(
-                    "⚠️ Нет задач для прикрепления. Сначала отправьте текст с требованиями."
-                )
-                return
-
-        # Download and attach
-        suffix = Path(filename).suffix or ".bin"
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            tmp_path = Path(tmp_dir) / f"{file_id}{suffix}"
-            tg_file = await tg_obj.get_file()
-            await tg_file.download_to_drive(tmp_path)
-
-            file_size = tmp_path.stat().st_size
-            logger.info("[tg] %s: chat=%s file_size=%d", media_label, chat_id, file_size)
-
-            try:
-                adapter = _build_adapter(config.root)
-            except Exception as exc:
-                await update.message.reply_text(f"❌ Ошибка конфигурации: {exc}")
-                return
-
-            attached = 0
-            for task_id in task_ids:
-                if not task_id:
-                    continue
-                result = await asyncio.to_thread(
-                    adapter.attach_file, task_id, str(tmp_path)
-                )
-                if result is not None:
-                    attached += 1
-
+        attached = await _attach_to_tasks(
+            adapter, task_ids,
+            file_id=file_id, filename=filename,
+            get_file=tg_obj.get_file, label=media_label, chat_id=chat_id,
+        )
         n = "е" if attached == 1 else "ам"
         if attached:
             await update.message.reply_text(
@@ -765,6 +910,86 @@ def make_handlers(
             text, keyboard = _build_favorites_content(context)
             await query.edit_message_text(text, reply_markup=keyboard)
 
+    async def handle_submit_ok(
+        update: Update, context: ContextTypes.DEFAULT_TYPE
+    ) -> None:
+        """Handle submit_ok: — create the pending tasks in Timetta."""
+        query = update.callback_query
+        if query is None:
+            return
+        await query.answer()
+        chat_id = update.effective_chat.id if update.effective_chat else 0
+        # Pop atomically up front: a second (double-click) callback then finds
+        # nothing pending instead of creating the batch twice in Timetta.
+        pending = (
+            context.chat_data.pop("pending_submit", None)
+            if isinstance(context.chat_data, dict)
+            else None
+        )
+        if not pending:
+            await query.edit_message_text("⚠️ Нечего создавать.")
+            return
+
+        task_dicts = pending.get("task_dicts", [])
+        media = pending.get("media")
+        await query.edit_message_text("⏳ Выгружаю в Timetta…")
+        try:
+            results = await asyncio.to_thread(_run_create, task_dicts, config.root)
+        except Exception as exc:
+            logger.exception("[tg] submit_ok failed: chat=%s", chat_id)
+            await query.edit_message_text(f"❌ Ошибка создания задач: {exc}")
+            return
+
+        task_ids = [r["id"] for r in results]
+        context.user_data["last_task_ids"] = task_ids
+        history: list[dict[str, str]] = context.user_data.setdefault("task_history", [])
+        for r in results:
+            history.append({"summary": r.get("summary", ""), "url": r.get("url", ""), "id": r.get("id", "")})
+
+        await query.edit_message_text(_format_results(results))
+        logger.info("[tg] submit_ok: chat=%s created=%d", chat_id, len(results))
+
+        if media:
+            try:
+                adapter = _build_adapter(config.root)
+            except Exception as exc:
+                await context.bot.send_message(chat_id=chat_id, text=f"❌ Ошибка конфигурации: {exc}")
+                return
+            file_id = media["file_id"]
+            label = media.get("label", "файл")
+            attached = await _attach_to_tasks(
+                adapter, task_ids,
+                file_id=file_id,
+                filename=media.get("filename", "file.bin"),
+                get_file=lambda: context.bot.get_file(file_id),
+                label=label, chat_id=chat_id,
+            )
+            ending = "е" if attached == 1 else "ам"
+            if attached:
+                await context.bot.send_message(
+                    chat_id=chat_id,
+                    text=f"📎 {label.capitalize()} прикреплено к {attached} задач{ending}.",
+                )
+            else:
+                await context.bot.send_message(
+                    chat_id=chat_id,
+                    text=f"⚠️ Не удалось прикрепить {label} (Timetta может не поддерживать вложения).",
+                )
+
+    async def handle_submit_cancel(
+        update: Update, context: ContextTypes.DEFAULT_TYPE
+    ) -> None:
+        """Handle submit_cancel: — drop the pending batch."""
+        query = update.callback_query
+        if query is None:
+            return
+        await query.answer()
+        chat_id = update.effective_chat.id if update.effective_chat else 0
+        if isinstance(context.chat_data, dict):
+            context.chat_data.pop("pending_submit", None)
+        await query.edit_message_text("❌ Отменено.")
+        logger.info("[tg] submit_cancel: chat=%s", chat_id)
+
     # ------------------------------------------------------------------
     # Assemble handler list
     # ------------------------------------------------------------------
@@ -780,6 +1005,8 @@ def make_handlers(
         CallbackQueryHandler(handle_apiproj_page, pattern=r"^apiproj_page:"),
         CallbackQueryHandler(handle_task_page, pattern=r"^task_page:"),
         CallbackQueryHandler(handle_task_select, pattern=r"^task_sel:"),
+        CallbackQueryHandler(handle_submit_ok, pattern=r"^submit_ok:"),
+        CallbackQueryHandler(handle_submit_cancel, pattern=r"^submit_cancel:"),
         CallbackQueryHandler(handle_callback),
         MessageHandler(filters.PHOTO, handle_photo),
         MessageHandler(filters.Document.ALL, handle_document),

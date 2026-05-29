@@ -16,8 +16,8 @@ sys.path.insert(0, str(ROOT / "src"))
 from tracker_assistant.telegram.handlers import (
     _active_project,
     _extract_forwarded_text,
+    _format_preview,
     _format_results,
-    _run_submit,
     make_handlers,
 )
 from tracker_assistant.telegram.config import BotConfig, ProjectConfig
@@ -160,7 +160,7 @@ class TestHandleText:
     def _make_config(self, tmp_path):
         return BotConfig(token="tok", root=tmp_path, projects={})
 
-    def test_handle_text_calls_submit(self, tmp_path):
+    def test_handle_text_shows_preview_no_create(self, tmp_path):
         registry = self._make_registry_with_project(chat_id=123)
         config = self._make_config(tmp_path)
         handle_text = self._get_handle_text(registry, config)
@@ -168,22 +168,37 @@ class TestHandleText:
         update = make_mock_update(text="create a login page", chat_id=123)
         context = make_mock_context()
 
-        fake_results = [{"summary": "Login page", "url": "http://x", "id": "abc"}]
+        task_dicts = [{"summary": "Login page", "description": "d", "tags": [], "assignee": ""}]
 
         async def run_test():
             with patch(
-                "tracker_assistant.telegram.handlers._run_submit",
-                return_value=fake_results,
-            ) as mock_submit:
-                with patch(
-                    "tracker_assistant.telegram.handlers._maybe_sync_vps",
-                    new=AsyncMock(return_value=None),
-                ):
-                    await handle_text(update, context)
+                "tracker_assistant.telegram.handlers._run_generate",
+                return_value=(task_dicts, [], []),
+            ) as mock_generate, patch(
+                "tracker_assistant.telegram.handlers._run_create",
+            ) as mock_create, patch(
+                "tracker_assistant.telegram.handlers._maybe_sync_vps",
+                new=AsyncMock(return_value=None),
+            ):
+                await handle_text(update, context)
 
-            mock_submit.assert_called_once()
-            call_kwargs = mock_submit.call_args
-            assert call_kwargs[0][0] == "create a login page"
+            # Generation happened, but nothing was created in Timetta.
+            mock_generate.assert_called_once()
+            assert mock_generate.call_args[0][0] == "create a login page"
+            mock_create.assert_not_called()
+
+            # Pending state stored for confirmation.
+            pending = context.chat_data["pending_submit"]
+            assert pending["task_dicts"] == task_dicts
+            assert pending["requirements"] == "create a login page"
+            assert pending["media"] is None
+
+            # Reply carries the confirm/cancel keyboard.
+            kwargs = update.message.reply_text.call_args.kwargs
+            keyboard = kwargs["reply_markup"]
+            callbacks = [b.callback_data for row in keyboard.inline_keyboard for b in row]
+            assert "submit_ok:" in callbacks
+            assert "submit_cancel:" in callbacks
 
         asyncio.run(run_test())
 
@@ -196,21 +211,21 @@ class TestHandleText:
         context = make_mock_context()
         context.chat_data = {"active_project_id": "22222222-2222-2222-2222-222222222222"}
 
-        fake_results = [{"summary": "Feature", "url": "http://x", "id": "t1"}]
+        task_dicts = [{"summary": "Feature", "description": "", "tags": [], "assignee": ""}]
 
         async def run_test():
             with patch(
-                "tracker_assistant.telegram.handlers._run_submit",
-                return_value=fake_results,
-            ) as mock_submit:
+                "tracker_assistant.telegram.handlers._run_generate",
+                return_value=(task_dicts, [], []),
+            ) as mock_generate:
                 with patch(
                     "tracker_assistant.telegram.handlers._maybe_sync_vps",
                     new=AsyncMock(return_value=None),
                 ):
                     await handle_text(update, context)
 
-            mock_submit.assert_called_once()
-            project_arg = mock_submit.call_args[0][1]
+            mock_generate.assert_called_once()
+            project_arg = mock_generate.call_args[0][1]
             assert project_arg.project_id == "22222222-2222-2222-2222-222222222222"
 
         asyncio.run(run_test())
@@ -244,15 +259,152 @@ class TestHandleText:
 
         async def run_test():
             with patch(
-                "tracker_assistant.telegram.handlers._run_submit",
-            ) as mock_submit:
+                "tracker_assistant.telegram.handlers._run_generate",
+            ) as mock_generate:
                 await handle_text(update, context)
 
-            mock_submit.assert_not_called()
+            mock_generate.assert_not_called()
             update.message.reply_text.assert_called_once()
             assert "не настроен" in update.message.reply_text.call_args[0][0]
 
         asyncio.run(run_test())
+
+
+# ---------------------------------------------------------------------------
+# Task review / confirmation / correction flow tests
+# ---------------------------------------------------------------------------
+
+
+class TestSubmitReviewFlow:
+    def _make_config(self, tmp_path):
+        return BotConfig(token="tok", root=tmp_path, projects={})
+
+    def _make_registry(self, chat_id=123):
+        project = ProjectConfig(project_id="11111111-1111-1111-1111-111111111111")
+        return ProjectRegistry({f"chat_{chat_id}": project})
+
+    def _get_callback(self, registry, config, pattern):
+        from telegram.ext import CallbackQueryHandler
+        handlers = make_handlers(registry, config)
+        for h in handlers:
+            pat = getattr(h, "pattern", None)
+            if isinstance(h, CallbackQueryHandler) and pat is not None and pat.pattern == pattern:
+                return h.callback
+        raise AssertionError(f"handler {pattern} not found in handlers list")
+
+    def _get_handle_text(self, registry, config):
+        return make_handlers(registry, config)[-1].callback
+
+    def test_submit_ok_creates_tasks(self, tmp_path):
+        registry = self._make_registry()
+        config = self._make_config(tmp_path)
+        handle_submit_ok = self._get_callback(registry, config, "^submit_ok:")
+
+        update = make_callback_update("submit_ok:", chat_id=123)
+        context = make_mock_context()
+        task_dicts = [{"summary": "T", "description": "", "tags": [], "assignee": ""}]
+        context.chat_data = {"pending_submit": {
+            "requirements": "req", "task_dicts": task_dicts,
+            "project_id": "p", "project_path": None, "sprint_id": "", "media": None,
+        }}
+        results = [{"summary": "T", "url": "http://x", "id": "task-1"}]
+
+        async def run_test():
+            with patch(
+                "tracker_assistant.telegram.handlers._run_create",
+                return_value=results,
+            ) as mock_create:
+                await handle_submit_ok(update, context)
+
+            mock_create.assert_called_once()
+            assert mock_create.call_args[0][0] == task_dicts
+            assert "pending_submit" not in context.chat_data
+            assert context.user_data["last_task_ids"] == ["task-1"]
+            last_text = update.callback_query.edit_message_text.call_args[0][0]
+            assert "Создано" in last_text
+
+        asyncio.run(run_test())
+
+    def test_submit_ok_nothing_pending(self, tmp_path):
+        registry = self._make_registry()
+        config = self._make_config(tmp_path)
+        handle_submit_ok = self._get_callback(registry, config, "^submit_ok:")
+
+        update = make_callback_update("submit_ok:", chat_id=123)
+        context = make_mock_context()
+
+        async def run_test():
+            with patch("tracker_assistant.telegram.handlers._run_create") as mock_create:
+                await handle_submit_ok(update, context)
+            mock_create.assert_not_called()
+            assert "Нечего создавать" in update.callback_query.edit_message_text.call_args[0][0]
+
+        asyncio.run(run_test())
+
+    def test_submit_cancel_clears_pending(self, tmp_path):
+        registry = self._make_registry()
+        config = self._make_config(tmp_path)
+        handle_submit_cancel = self._get_callback(registry, config, "^submit_cancel:")
+
+        update = make_callback_update("submit_cancel:", chat_id=123)
+        context = make_mock_context()
+        context.chat_data = {"pending_submit": {"task_dicts": [], "media": None}}
+
+        async def run_test():
+            await handle_submit_cancel(update, context)
+            assert "pending_submit" not in context.chat_data
+            assert "Отменено" in update.callback_query.edit_message_text.call_args[0][0]
+
+        asyncio.run(run_test())
+
+    def test_text_while_pending_is_correction(self, tmp_path):
+        registry = self._make_registry()
+        config = self._make_config(tmp_path)
+        handle_text = self._get_handle_text(registry, config)
+
+        update = make_mock_update(text="make it shorter", chat_id=123)
+        context = make_mock_context()
+        old_dicts = [{"summary": "Old", "description": "", "tags": [], "assignee": ""}]
+        context.chat_data = {"pending_submit": {
+            "requirements": "original requirements", "task_dicts": old_dicts,
+            "project_id": "11111111-1111-1111-1111-111111111111",
+            "project_path": None, "sprint_id": "", "media": None,
+        }}
+        new_dicts = [{"summary": "New", "description": "", "tags": [], "assignee": ""}]
+
+        async def run_test():
+            with patch(
+                "tracker_assistant.telegram.handlers._run_generate",
+                return_value=(new_dicts, [], []),
+            ) as mock_generate, patch(
+                "tracker_assistant.telegram.handlers._run_create",
+            ) as mock_create:
+                await handle_text(update, context)
+
+            mock_generate.assert_called_once()
+            mock_create.assert_not_called()
+            req_arg = mock_generate.call_args[0][0]
+            assert "original requirements" in req_arg
+            assert "make it shorter" in req_arg
+            assert context.chat_data["pending_submit"]["task_dicts"] == new_dicts
+
+        asyncio.run(run_test())
+
+    def test_preview_format_detailed(self):
+        users = [{"id": "u1", "displayName": "Иван Петров"}]
+        tags = [{"id": "t1", "name": "Фронтенд"}]
+        task_dicts = [{
+            "summary": "Сделать форму логина",
+            "description": "Очень длинное описание " * 20,
+            "assignee": "u1",
+            "tags": ["t1"],
+        }]
+        out = _format_preview(task_dicts, users, tags)
+        assert "Проверь задачи (1)" in out
+        assert "Сделать форму логина" in out
+        assert "Иван Петров" in out
+        assert "Фронтенд" in out
+        assert "…" in out  # description truncated
 
 
 # ---------------------------------------------------------------------------
