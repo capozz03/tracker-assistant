@@ -51,6 +51,19 @@ def make_mock_context():
     return ctx
 
 
+def make_callback_update(data, chat_id=10):
+    query = MagicMock()
+    query.data = data
+    query.answer = AsyncMock()
+    query.edit_message_text = AsyncMock()
+    query.edit_message_reply_markup = AsyncMock()
+    update = MagicMock()
+    update.callback_query = query
+    update.effective_chat = MagicMock()
+    update.effective_chat.id = chat_id
+    return update
+
+
 # ---------------------------------------------------------------------------
 # _format_results tests
 # ---------------------------------------------------------------------------
@@ -364,6 +377,68 @@ class TestCmdProject:
             update.message.reply_text.assert_called_once()
             msg = update.message.reply_text.call_args[0][0]
             assert "TIMETTA_TOKEN" in msg
+
+        asyncio.run(run_test())
+
+    def _get_apiproj_page(self, registry, config):
+        from telegram.ext import CallbackQueryHandler
+        handlers = make_handlers(registry, config)
+        for h in handlers:
+            pat = getattr(h, "pattern", None)
+            if isinstance(h, CallbackQueryHandler) and pat is not None and pat.pattern == "^apiproj_page:":
+                return h.callback
+        raise AssertionError("handle_apiproj_page not found in handlers list")
+
+    def test_paginates_many_projects(self, tmp_path):
+        registry = ProjectRegistry({})
+        config = self._make_config(tmp_path)
+        cmd_project = self._get_cmd_project(registry, config)
+
+        update = make_mock_update(chat_id=10)
+        context = make_mock_context()
+        fake_projects = [{"id": f"uuid-{i}", "name": f"P{i}"} for i in range(20)]
+
+        async def run_test():
+            with patch("tracker_assistant.telegram.handlers._build_adapter") as mock_build:
+                mock_adapter = MagicMock()
+                mock_adapter.get_projects = MagicMock(return_value=fake_projects)
+                mock_build.return_value = mock_adapter
+                await cmd_project(update, context)
+
+            # Full ordered list cached for page navigation
+            assert len(context.chat_data["_projects_list"]) == 20
+            kb = update.message.reply_text.call_args.kwargs["reply_markup"]
+            rows = kb.inline_keyboard
+            # 8 item rows (page size) + 1 navigation row
+            assert len(rows) == 9
+            nav_labels = [b.text for b in rows[-1]]
+            assert "Далее →" in nav_labels
+            assert "← Назад" not in nav_labels  # first page has no prev
+
+        asyncio.run(run_test())
+
+    def test_apiproj_page_navigates_without_refetch(self, tmp_path):
+        registry = ProjectRegistry({})
+        config = self._make_config(tmp_path)
+        handle_apiproj_page = self._get_apiproj_page(registry, config)
+
+        update = make_callback_update("apiproj_page:1", chat_id=10)
+        context = make_mock_context()
+        projects = [{"id": f"uuid-{i}", "name": f"P{i}"} for i in range(20)]
+        context.chat_data["_projects_list"] = projects
+        context.chat_data["_project_cache"] = {p["id"]: p["name"] for p in projects}
+
+        async def run_test():
+            with patch("tracker_assistant.telegram.handlers._build_adapter") as mock_build:
+                await handle_apiproj_page(update, context)
+                mock_build.assert_not_called()  # cached list reused, no API hit
+
+            update.callback_query.edit_message_text.assert_called_once()
+            kb = update.callback_query.edit_message_text.call_args.kwargs["reply_markup"]
+            nav_labels = [b.text for b in kb.inline_keyboard[-1]]
+            # middle page of 3 (20 items / 8) → both nav directions present
+            assert "← Назад" in nav_labels
+            assert "Далее →" in nav_labels
 
         asyncio.run(run_test())
 

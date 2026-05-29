@@ -25,11 +25,14 @@ from ..submit import submit_requirements
 from ..shared.io_utils import load_cached, load_env
 from ..timetta import TimettaAdapter
 from .config import BotConfig, ProjectConfig
-from .pagination import make_select_keyboard
+from .pagination import make_select_keyboard, paginate
 from .projects import ProjectRegistry
 from .vps_sync import sync_codebase
 
 logger = logging.getLogger(__name__)
+
+# Page size for the live Timetta-API project list shown by /project.
+_API_PROJECTS_PAGE_SIZE = 8
 
 
 # ---------------------------------------------------------------------------
@@ -195,46 +198,90 @@ def make_handlers(
     async def _fetch_project_content(
         context: ContextTypes.DEFAULT_TYPE,
         chat_id: int,
+        *,
+        page: int = 0,
+        refetch: bool = True,
     ) -> tuple[str, InlineKeyboardMarkup] | str:
-        """Fetch Timetta projects and build inline selection keyboard.
+        """Fetch Timetta projects and build a paginated inline selection keyboard.
 
         Returns (text, keyboard) on success, or an error string on failure.
-        Side-effect: caches {id: name} in context.chat_data["_project_cache"].
+        Side-effects: caches the ordered list in context.chat_data["_projects_list"]
+        and {id: name} in "_project_cache". On page navigation pass refetch=False
+        to reuse the cached list instead of hitting the API again.
         """
-        try:
-            adapter = _build_adapter(config.root)
-        except Exception:
-            return "❌ TIMETTA_TOKEN не задан. Добавьте его в .env."
+        chat_data = context.chat_data if isinstance(context.chat_data, dict) else {}
 
-        try:
-            projects: list[dict[str, Any]] = await asyncio.to_thread(adapter.get_projects)
-        except Exception as exc:
-            logger.exception("[tg] get_projects failed chat=%s", chat_id)
-            return f"❌ Ошибка получения проектов: {exc}"
+        projects: list[dict[str, str]] = chat_data.get("_projects_list", [])
+        if refetch or not projects:
+            try:
+                adapter = _build_adapter(config.root)
+            except Exception:
+                return "❌ TIMETTA_TOKEN не задан. Добавьте его в .env."
+
+            try:
+                fetched: list[dict[str, Any]] = await asyncio.to_thread(adapter.get_projects)
+            except Exception as exc:
+                logger.exception("[tg] get_projects failed chat=%s", chat_id)
+                return f"❌ Ошибка получения проектов: {exc}"
+
+            if not fetched:
+                return "ℹ️ Проекты не найдены в Timetta."
+
+            projects = [{"id": p["id"], "name": p.get("name", p["id"])} for p in fetched]
+            if isinstance(context.chat_data, dict):
+                context.chat_data["_projects_list"] = projects
+                context.chat_data["_project_cache"] = {p["id"]: p["name"] for p in projects}
 
         if not projects:
             return "ℹ️ Проекты не найдены в Timetta."
 
-        cache: dict[str, str] = {p["id"]: p.get("name", p["id"]) for p in projects}
-        if isinstance(context.chat_data, dict):
-            context.chat_data["_project_cache"] = cache
+        total = len(projects)
+        total_pages = (total + _API_PROJECTS_PAGE_SIZE - 1) // _API_PROJECTS_PAGE_SIZE
+        page = max(0, min(page, total_pages - 1))
+        page_items, has_prev, has_next = paginate(projects, page, _API_PROJECTS_PAGE_SIZE)
 
-        active_id: str = (
-            context.chat_data.get("active_project_id", "")
-            if isinstance(context.chat_data, dict)
-            else ""
-        )
+        active_id: str = chat_data.get("active_project_id", "")
         buttons: list[list[InlineKeyboardButton]] = []
-        for p in projects[:10]:
+        for p in page_items:
             pid = p["id"]
-            name = p.get("name", pid)
+            name = p["name"]
             label = f"✅ {name}" if pid == active_id else name
             buttons.append([InlineKeyboardButton(label, callback_data=f"sel:{pid}")])
 
-        note = f"\n\n_Показаны первые 10 из {len(projects)}_" if len(projects) > 10 else ""
+        nav: list[InlineKeyboardButton] = []
+        if has_prev:
+            nav.append(InlineKeyboardButton("← Назад", callback_data=f"apiproj_page:{page - 1}"))
+        if has_next:
+            nav.append(InlineKeyboardButton("Далее →", callback_data=f"apiproj_page:{page + 1}"))
+        if nav:
+            buttons.append(nav)
+
+        cache: dict[str, str] = chat_data.get("_project_cache", {})
         header = f"📂 Активный: *{cache.get(active_id, active_id)}*\n\n" if active_id else ""
-        logger.info("[FIX] _fetch_project_content: %d projects chat=%s", len(projects), chat_id)
+        note = f"\n\n_Стр. {page + 1}/{total_pages} · всего {total}_" if total_pages > 1 else ""
+        logger.info("[tg] _fetch_project_content: %d projects chat=%s page=%d", total, chat_id, page)
         return f"{header}Выберите проект:{note}", InlineKeyboardMarkup(buttons)
+
+    async def handle_apiproj_page(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Handle apiproj_page:N callback — navigate live Timetta-API project pages."""
+        query = update.callback_query
+        if query is None:
+            return
+        await query.answer()
+        chat_id = update.effective_chat.id if update.effective_chat else 0
+        data = query.data or ""
+        try:
+            page = int(data.split(":", 1)[1])
+        except (IndexError, ValueError):
+            logger.warning("[tg] apiproj_page: bad data=%r chat=%s", data, chat_id)
+            return
+        result = await _fetch_project_content(context, chat_id, page=page, refetch=False)
+        if isinstance(result, str):
+            await query.edit_message_text(result)
+        else:
+            text, keyboard = result
+            await query.edit_message_text(text, reply_markup=keyboard, parse_mode="Markdown")
+        logger.info("[tg] apiproj_page: chat=%s page=%d", chat_id, page)
 
     def _build_favorites_content(
         context: ContextTypes.DEFAULT_TYPE,
@@ -730,6 +777,7 @@ def make_handlers(
         # Pattern-specific callbacks before the generic catch-all
         CallbackQueryHandler(handle_proj_page, pattern=r"^proj_page:"),
         CallbackQueryHandler(handle_proj_sel, pattern=r"^proj_sel:"),
+        CallbackQueryHandler(handle_apiproj_page, pattern=r"^apiproj_page:"),
         CallbackQueryHandler(handle_task_page, pattern=r"^task_page:"),
         CallbackQueryHandler(handle_task_select, pattern=r"^task_sel:"),
         CallbackQueryHandler(handle_callback),
