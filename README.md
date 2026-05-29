@@ -84,6 +84,10 @@ uv run task-telegram --dry-run
 uv run task-telegram --log-level DEBUG
 ```
 
+> Бот сначала показывает сгенерированные задачи на проверку (превью с кнопками
+> «Создать» / «Отмена»); правки можно прислать текстом. Выгрузка в Timetta — только
+> после подтверждения. Подробнее: [docs/telegram-bot.md](docs/telegram-bot.md).
+
 ```bash
 uv run python scripts/task_cli.py list-users
 uv run python scripts/task_cli.py list-tags
