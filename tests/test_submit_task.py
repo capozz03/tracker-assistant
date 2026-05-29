@@ -14,6 +14,12 @@ sys.path.insert(0, str(ROOT / "src"))
 
 from tracker_assistant.submit.stack_detector import scan_project_stack
 from tracker_assistant.submit.prompt import resolve_tags
+from tracker_assistant.submit.service import (
+    DEFAULT_TASK_TYPE,
+    create_tasks,
+    generate_tasks,
+    submit_requirements,
+)
 from tracker_assistant.shared.claude_client import call_claude_list
 
 
@@ -200,3 +206,102 @@ class TestResolveTagsFunction:
         """Tag with empty code should not be matched by empty string."""
         result = resolve_tags([""], _KNOWN_TAGS)
         assert result == []
+
+
+# ---------------------------------------------------------------------------
+# generate_tasks / create_tasks split
+# ---------------------------------------------------------------------------
+
+
+class TestGenerateTasks:
+    def _claude_tasks(self):
+        return [
+            {"summary": "A", "description": "d", "tags": ["aaa-111"], "assignee": "u1"},
+            {"summary": "B", "tags": [], "assignee": "", "project_id": "explicit"},
+        ]
+
+    def test_generate_tasks_no_timetta_calls(self, tmp_path):
+        """generate_tasks must only call Claude and normalize — never touch Timetta."""
+        with patch(
+            "tracker_assistant.submit.service.call_claude_list",
+            return_value=self._claude_tasks(),
+        ) as mock_claude:
+            result = generate_tasks(
+                "requirements",
+                "proj-uuid",
+                None,  # no project_path → empty stack, no scanning
+                tmp_path,
+                tags=[],
+                users=[],
+                sprint_id="sprint-1",
+            )
+
+        mock_claude.assert_called_once()
+        assert len(result) == 2
+        # project_id defaulted where missing, kept where explicit
+        assert result[0]["project_id"] == "proj-uuid"
+        assert result[1]["project_id"] == "explicit"
+        # task_type defaulted
+        assert result[0]["task_type"] == DEFAULT_TASK_TYPE
+        # sprint id injected into extra
+        assert result[0]["extra"]["sprintId"] == "sprint-1"
+        # raw tags/assignee preserved inside dicts for preview + creation
+        assert result[0]["tags"] == ["aaa-111"]
+        assert result[0]["assignee"] == "u1"
+
+
+class TestCreateTasks:
+    def test_create_tasks_creates_and_returns_urls(self, tmp_path):
+        adapter = MagicMock()
+        task_dicts = [
+            {"project_id": "p", "summary": "A", "task_type": "tt", "tags": ["aaa-111"], "assignee": "u1"},
+            {"project_id": "p", "summary": "B", "task_type": "tt", "tags": [], "assignee": ""},
+        ]
+        known_tags = [{"id": "aaa-111", "name": "Фронтенд"}]
+        created_ids = iter(["id-1", "id-2"])
+
+        with patch(
+            "tracker_assistant.submit.service.create_task",
+            side_effect=lambda a, t, root=None: {"id": next(created_ids)},
+        ) as mock_create:
+            results = create_tasks(task_dicts, adapter=adapter, tags=known_tags, root=tmp_path)
+
+        assert mock_create.call_count == 2
+        assert [r["id"] for r in results] == ["id-1", "id-2"]
+        assert results[0]["url"] == "https://app.timetta.com/issues/id-1"
+        assert results[0]["tags"] == ["aaa-111"]  # resolved name→uuid passthrough
+        # first task carried tags + assignee → a follow-up update_task is issued
+        adapter.update_task.assert_any_call("id-1", tags=["aaa-111"], assigneeId="u1")
+        # input dicts must NOT be mutated — preview/pending state still holds them
+        assert task_dicts[0]["tags"] == ["aaa-111"]
+
+
+class TestSubmitRequirementsWrapper:
+    def test_submit_requirements_wrapper(self, tmp_path):
+        """The wrapper == generate_tasks + create_tasks (back-compat for the CLI)."""
+        adapter = MagicMock()
+        known_tags = [{"id": "aaa-111", "name": "Фронтенд"}]
+
+        with patch(
+            "tracker_assistant.submit.service.call_claude_list",
+            return_value=[{"summary": "A", "tags": ["aaa-111"], "assignee": "u1"}],
+        ), patch(
+            "tracker_assistant.submit.service.create_task",
+            return_value={"id": "id-1"},
+        ) as mock_create:
+            results = submit_requirements(
+                requirements="req",
+                project_id="proj-uuid",
+                adapter=adapter,
+                users=[],
+                tags=known_tags,
+                project_path=None,
+                root=tmp_path,
+                sprint_id="",
+            )
+
+        mock_create.assert_called_once()
+        assert results[0]["id"] == "id-1"
+        assert results[0]["url"] == "https://app.timetta.com/issues/id-1"
+        assert results[0]["summary"] == "A"
+        assert results[0]["tags"] == ["aaa-111"]

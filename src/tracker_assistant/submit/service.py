@@ -87,7 +87,9 @@ def create_tasks(
     """Создание подготовленных задач в Timetta: resolve_tags → create_task → update_task."""
     results: list[dict[str, Any]] = []
     total = len(task_dicts)
-    for idx, task_dict in enumerate(task_dicts, 1):
+    for idx, original in enumerate(task_dicts, 1):
+        # Работаем с копией: не мутируем входные dict'ы (их держит превью/pending)
+        task_dict = dict(original)
         # Tags идут отдельным PATCH — POST /Issues не принимает теги
         raw_tags = task_dict.pop("tags", [])
         pending_tags = resolve_tags(raw_tags, tags)
