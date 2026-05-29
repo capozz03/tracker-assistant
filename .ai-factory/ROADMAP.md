@@ -14,7 +14,10 @@
 - [x] **Telegram: interactive project selection & favourites** — /project из Timetta API с inline-кнопками, /favorites
 - [x] **Docker deployment** — Dockerfile, compose.yml, compose.override.yml, compose.production.yml
 - [x] **Centralized logging** — shared/logging.py, настройка через LOG_LEVEL env var
-- [ ] **Fix: tag assignment in task creation** — задача создаётся с пустым тегом вместо "backend" / "frontend"; диагностика и фикс логики выбора тега в LLM-пайплайне (enrich_task или submit_requirements)
+- [x] **Telegram: task review before Timetta upload** — превью задач (постановка + декомпозиция) с подтверждением перед выгрузкой; правки свободным текстом → регенерация; разбиение submit на generate_tasks + create_tasks
+- [x] **Fix: tag assignment in task creation** — задача создаётся с пустым тегом вместо "backend" / "frontend"; диагностика и фикс логики выбора тега в LLM-пайплайне (enrich_task или submit_requirements)
+- [ ] **Fix: не отдавать сырой текст исключений пользователю** — ❌-ответы бота показывают сырой `{exc}` (может включать тело HTTP-ответа Timetta); заменить на общий месседж + детальный лог на сервере (/aif-fix)
+- [ ] **Refactor: вынести submit/preview-флоу из handlers.py** — handlers.py разросся (~1015 строк при лимите 500); вынести submit/preview-хелперы в `telegram/submit_flow.py`
 - [ ] **Persistent bot state** — PicklePersistence или SQLite: избранные и активный проект выживают рестарт
 - [ ] **Telegram: pinned active project message** — при выборе проекта в чате закрепляется сообщение с его именем; визуально показывает активный контекст без необходимости помнить, в каком проекте работаешь
 - [ ] **Telegram: loading indicators & progress feedback** — анимация во время долгих операций: send_chat_action("typing"), прогресс-сообщение с редактируемыми точками ("Создаю задачу · / ··· / ···"); пользователь видит, что бот работает, а не завис
@@ -38,3 +41,5 @@
 | Telegram: interactive project selection & favourites | 2026-05-25 |
 | Docker deployment | 2026-05-25 |
 | Centralized logging | 2026-05-25 |
+| Telegram: task review before Timetta upload | 2026-05-29 |
+| Fix: tag assignment in task creation | 2026-05-29 |
